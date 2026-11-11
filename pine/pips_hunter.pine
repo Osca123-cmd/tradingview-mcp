@@ -11,15 +11,23 @@ emaSlowLen = input.int(34, "EMA Slow Length", minval=2, group="EMA Settings")
 
 // Signal filters
 confirmOnClose = input.bool(true, "Signal Only On Bar Close (no repaint)", group="Signal Filters")
-signalWindow   = input.int(3, "Bars To Wait For Filters After Cross", minval=0, maxval=20, group="Signal Filters", tooltip="After an EMA cross, the signal may still fire within this many bars as soon as every enabled filter agrees. 0 = only on the cross bar.")
+signalWindow   = input.int(8, "Bars To Wait For Filters After Cross", minval=0, maxval=20, group="Signal Filters", tooltip="After an EMA cross, the signal may still fire within this many bars as soon as every enabled filter agrees. 0 = only on the cross bar.")
 useTrendFilter = input.bool(true, "Trend Filter (price vs Trend EMA)", group="Signal Filters")
 trendEmaLen    = input.int(200, "Trend EMA Length", minval=1, group="Signal Filters")
 useAdxFilter   = input.bool(true, "ADX Filter (skip sideways market)", group="Signal Filters")
 adxLen         = input.int(14, "ADX Length", minval=1, group="Signal Filters")
 adxThreshold   = input.float(20.0, "ADX Minimum", minval=0, step=0.5, group="Signal Filters")
+adxAllowRising = input.bool(true, "Also Accept Rising ADX", group="Signal Filters", tooltip="ADX reacts late right after a reversal. With this on, a signal is also accepted while ADX is still below the minimum but rising for 2 bars with DI pointing in the signal direction.")
 useHtfFilter   = input.bool(false, "Higher Timeframe Filter", group="Signal Filters")
 htfTimeframe   = input.timeframe("60", "Higher Timeframe", group="Signal Filters")
 useZoneFilter  = input.bool(true, "Supply/Demand Filter", group="Signal Filters", tooltip="Blocks Buy signals while price is inside a supply zone and Sell signals while price is inside a demand zone.")
+
+// Trend continuation (re-entry) signals
+useContinuation  = input.bool(true, "Trend Continuation Signals", group="Continuation Signals", tooltip="During a trend with no new EMA cross, gives a new signal each time price pulls back to the fast EMA and then resumes in the trend direction.")
+pullbackLookback = input.int(5, "Pullback Lookback (bars)", minval=1, maxval=30, group="Continuation Signals")
+cooldownBars     = input.int(5, "Minimum Bars Between Signals", minval=1, maxval=100, group="Continuation Signals")
+keepSignalLabels = input.bool(true, "Keep Past Signal Labels", group="Continuation Signals")
+showBlocked      = input.bool(true, "Mark Rejected EMA Crosses", group="Continuation Signals", tooltip="Shows a small grey mark with the filter that rejected an EMA cross, so you can see why no signal appeared.")
 
 // Trade management
 tpCount = input.int(4, "Number of Take Profits", minval=1, maxval=4, group="Trade Management")
@@ -198,42 +206,6 @@ if showZones
         if highestSince - dBottom >= atr * impulseMult and close > dTop
             addZone(demandZones, dTop, dBottom, bar_index - swingLen, false)
 
-// === SIGNAL GENERATION ===
-trendLongOK  = not useTrendFilter or close > emaTrend
-trendShortOK = not useTrendFilter or close < emaTrend
-adxOK        = not useAdxFilter or adx >= adxThreshold
-htfLongOK    = not useHtfFilter or htfFast > htfSlow
-htfShortOK   = not useHtfFilter or htfFast < htfSlow
-zoneLongOK   = not (useZoneFilter and showZones) or not inSupply
-zoneShortOK  = not (useZoneFilter and showZones) or not inDemand
-
-longFiltersOK  = trendLongOK and adxOK and htfLongOK and zoneLongOK
-shortFiltersOK = trendShortOK and adxOK and htfShortOK and zoneShortOK
-
-// A cross stays "pending" for a few bars so a good setup is not lost
-// just because one filter lagged by a candle.
-var int pendingDir = 0
-var int pendingBar = na
-if rawLong
-    pendingDir := 1
-    pendingBar := bar_index
-if rawShort
-    pendingDir := -1
-    pendingBar := bar_index
-
-barOK = not confirmOnClose or barstate.isconfirmed
-pendingValid = pendingDir != 0 and bar_index - pendingBar <= signalWindow
-longSignal  = barOK and pendingValid and pendingDir == 1 and ribbonDir and longFiltersOK
-shortSignal = barOK and pendingValid and pendingDir == -1 and not ribbonDir and shortFiltersOK
-if longSignal or shortSignal
-    pendingDir := 0
-
-// === PLOTS ===
-pFast = plot(emaFast, color=showRibbon ? (ribbonDir ? color.rgb(78, 247, 0) : color.rgb(250, 0, 0)) : na, linewidth=2, style=plot.style_circles, title="EMA Fast")
-pSlow = plot(emaSlow, color=showRibbon ? color.new(ribbonDir ? color.rgb(78, 247, 0) : color.rgb(250, 0, 0), 50) : na, linewidth=1, title="EMA Slow")
-fill(pFast, pSlow, color=showRibbon ? color.new(ribbonDir ? color.rgb(78, 247, 0) : color.rgb(250, 0, 0), 88) : na, title="Ribbon Fill")
-plot(useTrendFilter ? emaTrend : na, color=color.new(color.orange, 20), linewidth=2, title="Trend EMA")
-
 // === TRADE STATE VARIABLES ===
 var label signalLabel = na
 var array<float> currentTPLevels = array.new<float>()
@@ -252,10 +224,82 @@ var box slBox = na
 var int tp1Wins = 0
 var int slLosses = 0
 
+// === SIGNAL GENERATION ===
+trendLongOK  = not useTrendFilter or close > emaTrend
+trendShortOK = not useTrendFilter or close < emaTrend
+adxRising    = adx > adx[1] and adx[1] > adx[2]
+adxLongOK    = not useAdxFilter or adx >= adxThreshold or (adxAllowRising and adxRising and diPlus > diMinus)
+adxShortOK   = not useAdxFilter or adx >= adxThreshold or (adxAllowRising and adxRising and diMinus > diPlus)
+htfLongOK    = not useHtfFilter or htfFast > htfSlow
+htfShortOK   = not useHtfFilter or htfFast < htfSlow
+zoneLongOK   = not (useZoneFilter and showZones) or not inSupply
+zoneShortOK  = not (useZoneFilter and showZones) or not inDemand
+
+longFiltersOK  = trendLongOK and adxLongOK and htfLongOK and zoneLongOK
+shortFiltersOK = trendShortOK and adxShortOK and htfShortOK and zoneShortOK
+
+// A cross stays "pending" for a few bars so a good setup is not lost
+// just because one filter lagged by a candle.
+var int pendingDir = 0
+var int pendingBar = na
+if rawLong
+    pendingDir := 1
+    pendingBar := bar_index
+if rawShort
+    pendingDir := -1
+    pendingBar := bar_index
+
+barOK = not confirmOnClose or barstate.isconfirmed
+pendingValid = pendingDir != 0 and bar_index - pendingBar <= signalWindow
+crossLong  = barOK and pendingValid and pendingDir == 1 and ribbonDir and longFiltersOK
+crossShort = barOK and pendingValid and pendingDir == -1 and not ribbonDir and shortFiltersOK
+
+// Trend continuation: price pulled back to the fast EMA, then resumed with the trend.
+var int lastSignalBar = na
+touchedFromAbove = ta.lowest(low - emaFast, pullbackLookback) <= 0
+touchedFromBelow = ta.highest(high - emaFast, pullbackLookback) >= 0
+tp1Done = array.size(tpHitStatus) > 0 and array.get(tpHitStatus, 0)
+cooledDown = na(lastSignalBar) or bar_index - lastSignalBar >= cooldownBars
+// A same-direction re-entry is only allowed once the running trade is finished or already reached TP1.
+canLong  = not tradeActive or tradeDirection != 1 or tp1Done
+canShort = not tradeActive or tradeDirection != -1 or tp1Done
+contLong  = useContinuation and barOK and cooledDown and canLong and ribbonDir and emaFast > emaFast[1] and touchedFromAbove and close > emaFast and close > high[1] and longFiltersOK
+contShort = useContinuation and barOK and cooledDown and canShort and not ribbonDir and emaFast < emaFast[1] and touchedFromBelow and close < emaFast and close < low[1] and shortFiltersOK
+
+longSignal  = crossLong or (contLong and not crossShort)
+shortSignal = not longSignal and (crossShort or contShort)
+isContinuation = not (crossLong or crossShort)
+if longSignal or shortSignal
+    pendingDir := 0
+    lastSignalBar := bar_index
+
+// An EMA cross that ran out of time: show which filter rejected it.
+if pendingDir != 0 and bar_index - pendingBar > signalWindow
+    if showBlocked and barstate.isconfirmed
+        bool wasLong = pendingDir == 1
+        string why = ""
+        if not (wasLong ? trendLongOK : trendShortOK)
+            why += " Trend"
+        if not (wasLong ? adxLongOK : adxShortOK)
+            why += " ADX"
+        if not (wasLong ? htfLongOK : htfShortOK)
+            why += " HTF"
+        if not (wasLong ? zoneLongOK : zoneShortOK)
+            why += " Zone"
+        if why != ""
+            label.new(bar_index, wasLong ? low : high, (wasLong ? "Buy ✕" : "Sell ✕") + why, style=wasLong ? label.style_label_up : label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+    pendingDir := 0
+
+// === PLOTS ===
+pFast = plot(emaFast, color=showRibbon ? (ribbonDir ? color.rgb(78, 247, 0) : color.rgb(250, 0, 0)) : na, linewidth=2, style=plot.style_circles, title="EMA Fast")
+pSlow = plot(emaSlow, color=showRibbon ? color.new(ribbonDir ? color.rgb(78, 247, 0) : color.rgb(250, 0, 0), 50) : na, linewidth=1, title="EMA Slow")
+fill(pFast, pSlow, color=showRibbon ? color.new(ribbonDir ? color.rgb(78, 247, 0) : color.rgb(250, 0, 0), 88) : na, title="Ribbon Fill")
+plot(useTrendFilter ? emaTrend : na, color=color.new(color.orange, 20), linewidth=2, title="Trend EMA")
+
 // === SIGNAL HANDLING ===
 if longSignal or shortSignal
     // Delete previous drawings
-    if not na(signalLabel)
+    if not na(signalLabel) and not keepSignalLabels
         label.delete(signalLabel)
 
     for ln in tpLines
@@ -300,7 +344,7 @@ if longSignal or shortSignal
     float lastTP = array.get(currentTPLevels, array.size(currentTPLevels) - 1)
 
     // Create BUY/SELL Signal Label
-    signalLabel := label.new(bar_index, tradeDirection > 0 ? low : high, tradeDirection > 0 ? "Smart Buy" : "Smart Sell", style=tradeDirection > 0 ? label.style_label_up : label.style_label_down, color=tradeDirection > 0 ? color.new(#00c853, 0) : color.new(#d50000, 0), textcolor=color.white, size=size.normal)
+    signalLabel := label.new(bar_index, tradeDirection > 0 ? low : high, isContinuation ? (tradeDirection > 0 ? "Trend Buy" : "Trend Sell") : (tradeDirection > 0 ? "Smart Buy" : "Smart Sell"), style=tradeDirection > 0 ? label.style_label_up : label.style_label_down, color=tradeDirection > 0 ? color.new(#00c853, 0) : color.new(#d50000, 0), textcolor=color.white, size=size.normal)
 
     // Create Horizontal TP/SL/Entry Lines, Right-Side Labels & background boxes
     int xRightInitial = bar_index + 10
@@ -370,8 +414,8 @@ if showTP_SL_Lines and (tradeActive or not na(tradeEndX))
         box.set_right(slBox, xRight)
 
 // === ALERTS ===
-alertcondition(longSignal, title="Long EMA Cross", message="Long EMA Crossover Signal")
-alertcondition(shortSignal, title="Short EMA Cross", message="Short Crossover Signal")
+alertcondition(longSignal, title="Long Signal", message="PIPS HUNTER: Buy signal")
+alertcondition(shortSignal, title="Short Signal", message="PIPS HUNTER: Sell signal")
 alertcondition(supplyTested, title="Supply Zone Tested", message="Price entered a supply zone")
 alertcondition(demandTested, title="Demand Zone Tested", message="Price entered a demand zone")
 
