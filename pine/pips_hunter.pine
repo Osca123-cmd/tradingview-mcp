@@ -26,8 +26,6 @@ useZoneFilter  = input.bool(true, "Supply/Demand Filter", group="Signal Filters"
 useContinuation  = input.bool(true, "Trend Continuation Signals", group="Continuation Signals", tooltip="During a trend with no new EMA cross, gives a new signal each time price pulls back to the fast EMA and then resumes in the trend direction.")
 pullbackLookback = input.int(5, "Pullback Lookback (bars)", minval=1, maxval=30, group="Continuation Signals")
 cooldownBars     = input.int(5, "Minimum Bars Between Signals", minval=1, maxval=100, group="Continuation Signals")
-keepSignalLabels = input.bool(true, "Keep Past Signal Labels", group="Continuation Signals")
-showBlocked      = input.bool(true, "Mark Rejected EMA Crosses", group="Continuation Signals", tooltip="Shows a small grey mark with the filter that rejected an EMA cross, so you can see why no signal appeared.")
 
 // Trade management
 tpCount = input.int(4, "Number of Take Profits", minval=1, maxval=4, group="Trade Management")
@@ -207,7 +205,6 @@ if showZones
             addZone(demandZones, dTop, dBottom, bar_index - swingLen, false)
 
 // === TRADE STATE VARIABLES ===
-var label signalLabel = na
 var array<float> currentTPLevels = array.new<float>()
 var array<bool> tpHitStatus = array.new<bool>()
 var float currentSLLevel = na
@@ -268,26 +265,12 @@ contShort = useContinuation and barOK and cooledDown and canShort and not ribbon
 
 longSignal  = crossLong or (contLong and not crossShort)
 shortSignal = not longSignal and (crossShort or contShort)
-isContinuation = not (crossLong or crossShort)
 if longSignal or shortSignal
     pendingDir := 0
     lastSignalBar := bar_index
 
-// An EMA cross that ran out of time: show which filter rejected it.
+// An EMA cross that ran out of time is dropped.
 if pendingDir != 0 and bar_index - pendingBar > signalWindow
-    if showBlocked and barstate.isconfirmed
-        bool wasLong = pendingDir == 1
-        string why = ""
-        if not (wasLong ? trendLongOK : trendShortOK)
-            why += " Trend"
-        if not (wasLong ? adxLongOK : adxShortOK)
-            why += " ADX"
-        if not (wasLong ? htfLongOK : htfShortOK)
-            why += " HTF"
-        if not (wasLong ? zoneLongOK : zoneShortOK)
-            why += " Zone"
-        if why != ""
-            label.new(bar_index, wasLong ? low : high, (wasLong ? "Buy ✕" : "Sell ✕") + why, style=wasLong ? label.style_label_up : label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
     pendingDir := 0
 
 // === PLOTS ===
@@ -299,9 +282,6 @@ plot(useTrendFilter ? emaTrend : na, color=color.new(color.orange, 20), linewidt
 // === SIGNAL HANDLING ===
 if longSignal or shortSignal
     // Delete previous drawings
-    if not na(signalLabel) and not keepSignalLabels
-        label.delete(signalLabel)
-
     for ln in tpLines
         line.delete(ln)
     array.clear(tpLines)
@@ -342,9 +322,6 @@ if longSignal or shortSignal
         array.push(currentTPLevels, tp)
         array.push(tpHitStatus, false)
     float lastTP = array.get(currentTPLevels, array.size(currentTPLevels) - 1)
-
-    // Create BUY/SELL Signal Label
-    signalLabel := label.new(bar_index, tradeDirection > 0 ? low : high, isContinuation ? (tradeDirection > 0 ? "Trend Buy" : "Trend Sell") : (tradeDirection > 0 ? "Smart Buy" : "Smart Sell"), style=tradeDirection > 0 ? label.style_label_up : label.style_label_down, color=tradeDirection > 0 ? color.new(#00c853, 0) : color.new(#d50000, 0), textcolor=color.white, size=size.normal)
 
     // Create Horizontal TP/SL/Entry Lines, Right-Side Labels & background boxes
     int xRightInitial = bar_index + 10
