@@ -19,9 +19,9 @@ zoneTFInput = input.timeframe("60", "Timeframe Zona (H4 atau H1)", group=G1, too
 swingLeft   = input.int(3, "Swing: candle di kiri", minval=1, maxval=20, group=G1)
 swingRight  = input.int(2, "Swing: candle di kanan", minval=1, maxval=20, group=G1, tooltip="Jumlah candle timeframe zona yang ditunggu untuk memastikan titik balik. Makin kecil makin cepat, makin besar makin ketat.")
 minReact    = input.float(1.0, "Pantulan minimum (x ATR TF zona)", minval=0.1, step=0.1, group=G1, tooltip="Titik balik hanya dihitung sebagai sentuhan kalau harga memantul sejauh ini. Menyaring harga yang cuma lewat.")
-minZoneH    = input.float(0.15, "Tinggi zona minimum (x ATR TF zona)", minval=0.02, step=0.01, group=G1)
-maxZoneH    = input.float(1.0, "Tinggi zona maksimum (x ATR TF zona)", minval=0.1, step=0.1, group=G1)
-mergeTol    = input.float(0.25, "Toleransi gabung zona (x ATR TF zona)", minval=0.0, step=0.05, group=G1, tooltip="Titik balik yang jaraknya sedekat ini dari zona lama dianggap sentuhan pada zona yang sama.")
+minZoneH    = input.float(0.08, "Tinggi zona minimum (x ATR TF zona)", minval=0.02, step=0.01, group=G1)
+maxZoneH    = input.float(0.3, "Tinggi zona maksimum (x ATR TF zona)", minval=0.05, step=0.05, group=G1, tooltip="Batas ketebalan zona. Turunkan kalau zona masih terlalu besar, naikkan kalau terlalu tipis.")
+mergeTol    = input.float(0.15, "Toleransi gabung zona (x ATR TF zona)", minval=0.0, step=0.05, group=G1, tooltip="Titik balik yang jaraknya sedekat ini dari zona lama dianggap sentuhan pada zona yang sama.")
 
 string G2 = "2 - Validasi dan umur zona"
 minTouches     = input.int(2, "Sentuhan minimum agar valid", minval=2, maxval=5, group=G2)
@@ -138,7 +138,7 @@ addTouch(float zTop, float zBottom, float react, int pivTime, int nowTime, int r
             z.sumReact += react
             float nt = math.max(zTop, z.top)
             float nb = math.min(zBottom, z.bottom)
-            if nt - nb <= maxH * 1.25
+            if nt - nb <= maxH
                 z.top := nt
                 z.bottom := nb
             z.lastTime := nowTime
