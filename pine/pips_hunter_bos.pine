@@ -1,0 +1,470 @@
+// This Pine Script®️ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// ©️ @traderschatroom88
+//wolfsg88
+//@version=6
+indicator("PIPS HUNTER", overlay=true, scale=scale.right, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// === INPUTS ===
+showRibbon = input.bool(true, "Show EMA Ribbon", group="EMA Settings")
+ribbonMode = input.string("Dots", "Ribbon Style", options=["Dots", "Full Ribbon", "Both"], group="EMA Settings")
+ema1Len = input.int(5, "EMA 1 Length", group="EMA Settings")
+ema2Len = input.int(11, "EMA 2 Length", group="EMA Settings")
+ema3Len = input.int(15, "EMA 3 Length", group="EMA Settings")
+ema4Len = input.int(18, "EMA 4 Length", group="EMA Settings")
+ema5Len = input.int(21, "EMA 5 Length", group="EMA Settings")
+ema6Len = input.int(24, "EMA 6 Length", group="EMA Settings")
+ema7Len = input.int(28, "EMA 7 Length", group="EMA Settings")
+ema8Len = input.int(34, "EMA 8 Length", group="EMA Settings")
+
+tpCount = input.int(4, "Number of Take Profits", minval=1, maxval=4, group="Trade Management")
+atrrMultiplier = input.float(2, "ATR Multiplier for SL", group="Trade Management")
+atrrTPFactor = input.float(1.0, "TP Multiplier (relative to SL)", group="Trade Management")
+atrLen = input.int(14, "ATR Length", group="Trade Management")
+showTP_SL_Lines = input.bool(true, "Show TP/SL Lines & Boxes", group="Trade Management")
+
+// Market Structure Inputs
+showSwings = input.bool(true, "Show Swing Labels (HH/HL/LH/LL)", group="Market Structure")
+showBOS = input.bool(true, "Show BOS", group="Market Structure")
+swingLen = input.int(3, "Swing Length", minval=1, group="Market Structure")
+swingTextColor = input.color(#fff100, "Swing Label Color", group="Market Structure")
+bosColor = input.color(color.white, "BOS Color", group="Market Structure")
+
+// Supply & Demand Inputs
+showZones = input.bool(true, "Show Supply / Demand (POI)", group="Supply & Demand")
+zoneLookback = input.int(20, "Zone Candle Lookback", minval=1, maxval=100, group="Supply & Demand")
+zoneWidth = input.float(0.3, "Zone Width (x ATR)", minval=0.05, step=0.05, group="Supply & Demand")
+maxZones = input.int(6, "Max Active Zones", minval=1, maxval=20, group="Supply & Demand")
+supplyColor = input.color(#f23645, "Supply Color", group="Supply & Demand")
+demandColor = input.color(#089981, "Demand Color", group="Supply & Demand")
+zoneFill = input.int(60, "Zone Transparency", minval=0, maxval=100, group="Supply & Demand")
+
+// Dashboard Input
+showDashboard = input.bool(true, "Show Trend Analysis Dashboard", group="Dashboard Settings")
+dashboardPosition = input.string("Bottom Right", "Dashboard Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"], group="Dashboard Settings")
+combinedTrendTF1 = input.string("5", "Trend Timeframe 1", options=["5", "15", "30", "60", "240", "D"], group="Dashboard Settings")
+combinedTrendTF2 = input.string("15", "Trend Timeframe 2", options=["5", "15", "30", "60", "240", "D"], group="Dashboard Settings")
+combinedTrendTF3 = input.string("60", "Trend Timeframe 3", options=["5", "15", "30", "60", "240", "D"], group="Dashboard Settings")
+
+// Market Analysis Input
+showMarket = input.bool(true, "Show Market Analysis", group="Market Analysis Settings")
+marketPosition = input.string("Bottom Left", "Market Analysis Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"], group="Market Analysis Settings")
+showVolumeRow = input.bool(true, "Show Volume Row", group="Market Analysis Settings")
+
+// Unified Border Color Input
+widgetBorderColor = input.color(#000000, "Screener & Dashboard border's colors", group="Widget Style", tooltip="Changes all borders and outlines for both screener and dashboard")
+
+// === SCREENER INPUTS ===
+showScreener = input.bool(true, "Show Screener", group="Screener Settings")
+screenerPosition = input.string("Top Right", "Screener Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"], group="Screener Settings")
+
+// === TYPES ===
+type Zone
+    box b
+    label tag
+    label poi
+    int dir
+    float top
+    float bot
+
+// === SHARED STATE ===
+atr = ta.atr(atrLen)
+var array<Zone> zones = array.new<Zone>()
+
+// === HELPER FUNCTIONS ===
+getTablePosition(pos) =>
+    switch pos
+        "Top Left"     => position.top_left
+        "Top Right"    => position.top_right
+        "Bottom Left"  => position.bottom_left
+        "Bottom Right" => position.bottom_right
+        => position.top_right
+
+getTFLabel(tf) =>
+    switch tf
+        "5"   => "5 Min"
+        "15"  => "15 Min"
+        "30"  => "30 Min"
+        "60"  => "1 Hour"
+        "240" => "4 Hour"
+        "D"   => "Daily"
+        => tf
+
+isTFBullish(tf) =>
+    _e2 = request.security(syminfo.tickerid, tf, ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+    _e8 = request.security(syminfo.tickerid, tf, ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+    _e8 < _e2
+
+deleteZone(Zone z) =>
+    box.delete(z.b)
+    label.delete(z.tag)
+    label.delete(z.poi)
+
+// Last opposite candle before the breakout candle becomes the zone
+newZone(int dir) =>
+    int idx = na
+    for i = 1 to zoneLookback
+        if (dir > 0 and close[i] < open[i]) or (dir < 0 and close[i] > open[i])
+            idx := i
+            break
+    Zone z = na
+    if not na(idx) and not na(atr)
+        float zTop = dir > 0 ? low[idx] + atr * zoneWidth : high[idx]
+        float zBot = dir > 0 ? low[idx] : high[idx] - atr * zoneWidth
+        // Skip a zone that overlaps an active zone on the same side
+        bool overlaps = false
+        if array.size(zones) > 0
+            for i = 0 to array.size(zones) - 1
+                Zone other = array.get(zones, i)
+                if other.dir == dir and zBot <= other.top and zTop >= other.bot
+                    overlaps := true
+                    break
+        if not overlaps
+            color zCol = dir > 0 ? demandColor : supplyColor
+            float zMid = (zTop + zBot) / 2
+            box zBox = box.new(bar_index - idx, zTop, bar_index, zBot, border_color=color.new(zCol, 30), bgcolor=color.new(zCol, zoneFill), extend=extend.right)
+            label zTag = label.new(bar_index + 10, zMid, dir > 0 ? "DEMAND" : "SUPPLY", style=label.style_none, textcolor=color.white, size=size.small)
+            label zPoi = label.new(bar_index - idx, zMid, "POI", style=label.style_none, textcolor=color.white, size=size.small)
+            z := Zone.new(zBox, zTag, zPoi, dir, zTop, zBot)
+    z
+
+// === CALCULATIONS ===
+ema1 = ta.ema(close, ema1Len)
+ema2 = ta.ema(close, ema2Len)
+ema3 = ta.ema(close, ema3Len)
+ema4 = ta.ema(close, ema4Len)
+ema5 = ta.ema(close, ema5Len)
+ema6 = ta.ema(close, ema6Len)
+ema7 = ta.ema(close, ema7Len)
+ema8 = ta.ema(close, ema8Len)
+
+// Determine ribbon direction
+ribbonDir = ema8 < ema2
+
+// Signal generation for crossovers
+longSignal = ta.crossover(ema2, ema8)
+shortSignal = ta.crossover(ema8, ema2)
+
+// === PLOTS - EMA Ribbon ===
+ribbonColor = ribbonDir ? color.rgb(78, 247, 0) : color.rgb(250, 0, 0)
+lineColor = color.new(ribbonColor, 50)
+dotDisplay = showRibbon and ribbonMode != "Full Ribbon" ? display.all : display.none
+lineDisplay = showRibbon and ribbonMode != "Dots" ? display.all : display.none
+
+plot(ema1, color=lineColor, display=lineDisplay, title="EMA 1")
+plot(ema2, color=lineColor, display=lineDisplay, title="EMA 2 Line")
+plot(ema3, color=lineColor, display=lineDisplay, title="EMA 3")
+plot(ema4, color=lineColor, display=lineDisplay, title="EMA 4")
+plot(ema5, color=lineColor, display=lineDisplay, title="EMA 5")
+plot(ema6, color=lineColor, display=lineDisplay, title="EMA 6")
+plot(ema7, color=lineColor, display=lineDisplay, title="EMA 7")
+plot(ema8, color=lineColor, display=lineDisplay, title="EMA 8")
+plot(ema2, color=ribbonColor, linewidth=2, style=plot.style_circles, display=dotDisplay, title="EMA 2")
+
+// === MARKET STRUCTURE ===
+var float lastPH = na
+var float lastPL = na
+var int lastPHBar = na
+var int lastPLBar = na
+var bool phBroken = true
+var bool plBroken = true
+
+ph = ta.pivothigh(high, swingLen, swingLen)
+pl = ta.pivotlow(low, swingLen, swingLen)
+
+if not na(ph)
+    if showSwings
+        label.new(bar_index - swingLen, ph, na(lastPH) or ph > lastPH ? "HH" : "LH", yloc=yloc.abovebar, style=label.style_none, textcolor=swingTextColor, size=size.small)
+    lastPH := ph
+    lastPHBar := bar_index - swingLen
+    phBroken := false
+
+if not na(pl)
+    if showSwings
+        label.new(bar_index - swingLen, pl, na(lastPL) or pl > lastPL ? "HL" : "LL", yloc=yloc.belowbar, style=label.style_none, textcolor=swingTextColor, size=size.small)
+    lastPL := pl
+    lastPLBar := bar_index - swingLen
+    plBroken := false
+
+bullBreak = not phBroken and close > lastPH
+bearBreak = not plBroken and close < lastPL
+
+if bullBreak
+    phBroken := true
+    if showBOS
+        line.new(lastPHBar, lastPH, bar_index, lastPH, color=bosColor, width=1)
+        label.new(int(math.avg(lastPHBar, bar_index)), lastPH, "BOS", style=label.style_none, textcolor=bosColor, size=size.small)
+
+if bearBreak
+    plBroken := true
+    if showBOS
+        line.new(lastPLBar, lastPL, bar_index, lastPL, color=bosColor, width=1)
+        label.new(int(math.avg(lastPLBar, bar_index)), lastPL, "BOS", style=label.style_none, textcolor=bosColor, size=size.small)
+
+// === SUPPLY & DEMAND ZONES ===
+if showZones and bullBreak
+    Zone demandZone = newZone(1)
+    if not na(demandZone)
+        array.push(zones, demandZone)
+
+if showZones and bearBreak
+    Zone supplyZone = newZone(-1)
+    if not na(supplyZone)
+        array.push(zones, supplyZone)
+
+// Remove zones once price closes through them
+if array.size(zones) > 0
+    for i = array.size(zones) - 1 to 0
+        Zone z = array.get(zones, i)
+        if (z.dir > 0 and close < z.bot) or (z.dir < 0 and close > z.top)
+            deleteZone(z)
+            array.remove(zones, i)
+
+while array.size(zones) > maxZones
+    deleteZone(array.shift(zones))
+
+// Keep the SUPPLY/DEMAND text just right of the last bar
+if barstate.islast and array.size(zones) > 0
+    for i = 0 to array.size(zones) - 1
+        label.set_x(array.get(zones, i).tag, bar_index + 10)
+
+// === TRADE STATE VARIABLES ===
+var label signalLabel = na
+var array<float> currentTPLevels = array.new<float>()
+var array<bool> tpHitStatus = array.new<bool>()
+var float currentSLLevel = na
+var int tradeDirection = 0
+var bool tradeActive = false
+var int tradeEndX = na
+var array<line> tpLines = array.new<line>()
+var line slLine = na
+var line entryLine = na
+var array<label> rightLabels = array.new<label>()
+var float plotEntryLevelVal = na
+var float plotSLLevelVal = na
+var float plotTP4LevelVal = na
+var box tpBox = na
+var box slBox = na
+
+// === SIGNAL HANDLING ===
+if (longSignal or shortSignal)
+    // Delete previous drawings
+    if not na(signalLabel)
+        label.delete(signalLabel)
+
+    if array.size(tpLines) > 0
+        for i = 0 to array.size(tpLines) - 1
+            line.delete(array.get(tpLines, i))
+    array.clear(tpLines)
+
+    if not na(slLine)
+        line.delete(slLine)
+        slLine := na
+
+    if not na(entryLine)
+        line.delete(entryLine)
+        entryLine := na
+
+    if array.size(rightLabels) > 0
+        for i = 0 to array.size(rightLabels) - 1
+            label.delete(array.get(rightLabels, i))
+    array.clear(rightLabels)
+
+    if not na(tpBox)
+        box.delete(tpBox)
+    tpBox := na
+
+    if not na(slBox)
+        box.delete(slBox)
+    slBox := na
+
+    // Setup new trade state
+    tradeActive := true
+    tradeEndX := na
+    tradeDirection := longSignal ? 1 : -1
+    entry = close
+    currentSLLevel := entry - tradeDirection * atr * atrrMultiplier
+
+    // Calculate and store TP Levels
+    array.clear(currentTPLevels)
+    array.clear(tpHitStatus)
+    for i = 1 to tpCount
+        tp = entry + tradeDirection * atr * atrrMultiplier * atrrTPFactor * i
+        array.push(currentTPLevels, tp)
+        array.push(tpHitStatus, false)
+
+    // Update plot levels for background filling
+    plotEntryLevelVal := entry
+    plotSLLevelVal := currentSLLevel
+    plotTP4LevelVal := array.last(currentTPLevels)
+
+    // Create BUY/SELL Signal Label
+    signalLabel := label.new(bar_index,
+                             y=tradeDirection > 0 ? low : high,
+                             text=tradeDirection > 0 ? "Smart Buy" : "Smart Sell",
+                             style=tradeDirection > 0 ? label.style_label_up : label.style_label_down,
+                             color=tradeDirection > 0 ? color.new(#00c853,0) : color.new(#d50000,0),
+                             textcolor=color.white,
+                             size=size.normal)
+
+    // Create Horizontal TP/SL/Entry Lines & Right-Side Labels
+    int xRightInitial = bar_index + 10
+
+    if showTP_SL_Lines
+        // Create Entry line and label
+        entryRightLabel = label.new(xRightInitial, entry, "ENTRY : " + str.tostring(entry, format.mintick), style=label.style_label_left, color=#fff100, textcolor=color.black, size=size.normal)
+        array.push(rightLabels, entryRightLabel)
+        entryLine := line.new(bar_index, entry, xRightInitial, entry, color=#fff100, style=line.style_solid, width=2)
+
+        // Create TP lines and labels
+        for i = 0 to array.size(currentTPLevels) - 1
+            yVal = array.get(currentTPLevels, i)
+            tpLine = line.new(bar_index, yVal, xRightInitial, yVal, color=#00ff00, style=line.style_solid, width=2)
+            array.push(tpLines, tpLine)
+
+            tpLabelText = "TP " + str.tostring(i + 1) + " : " + str.tostring(yVal, format.mintick)
+            tpRightLabel = label.new(xRightInitial, yVal, tpLabelText, style=label.style_label_left, color=#00ff00, textcolor=color.black, size=size.normal)
+            array.push(rightLabels, tpRightLabel)
+//join telegram @traderschatroom88
+        // Create SL line and label
+        slLine := line.new(bar_index, currentSLLevel, xRightInitial, currentSLLevel, color=color.red, style=line.style_solid, width=2)
+        slRightLabel = label.new(xRightInitial, currentSLLevel, "SL : " + str.tostring(currentSLLevel, format.mintick), style=label.style_label_left, color=color.red, textcolor=color.white, size=size.normal)
+        array.push(rightLabels, slRightLabel)
+
+        // Create Box objects for background filling
+        tpBox := box.new(left=bar_index,
+                         top=math.max(entry, plotTP4LevelVal),
+                         bottom=math.min(entry, plotTP4LevelVal),
+                         right=xRightInitial,
+                         bgcolor=color.new(#089981, 80),
+                         border_color=color.rgb(0, 0, 0, 100))
+
+        slBox := box.new(left=bar_index,
+                         top=math.max(entry, plotSLLevelVal),
+                         bottom=math.min(entry, plotSLLevelVal),
+                         right=xRightInitial,
+                         bgcolor=color.new(#f23645, 80),
+                         border_color=color.rgb(0, 0, 0, 100))
+
+// === TRADE MANAGEMENT ===
+// Moves every drawing of the current trade to a new right edge
+setTradeRight(int xRight) =>
+    if not na(entryLine)
+        line.set_x2(entryLine, xRight)
+    if array.size(tpLines) > 0
+        for i = 0 to array.size(tpLines) - 1
+            line.set_x2(array.get(tpLines, i), xRight)
+    if not na(slLine)
+        line.set_x2(slLine, xRight)
+    if array.size(rightLabels) > 0
+        for i = 0 to array.size(rightLabels) - 1
+            label.set_x(array.get(rightLabels, i), xRight)
+    if not na(tpBox)
+        box.set_right(tpBox, xRight)
+    if not na(slBox)
+        box.set_right(slBox, xRight)
+
+if tradeActive
+    if showTP_SL_Lines
+        setTradeRight(bar_index + 10)
+
+    // Stop Loss hit check
+    slHit = (tradeDirection > 0 and low <= currentSLLevel) or (tradeDirection < 0 and high >= currentSLLevel)
+
+    // Track individual TP hits
+    bool allTPsHit = true
+    for i = 0 to array.size(currentTPLevels) - 1
+        tpLevel = array.get(currentTPLevels, i)
+        if (tradeDirection > 0 and high >= tpLevel) or (tradeDirection < 0 and low <= tpLevel)
+            array.set(tpHitStatus, i, true)
+        if not array.get(tpHitStatus, i)
+            allTPsHit := false
+
+    if slHit or allTPsHit
+        tradeActive := false
+        tradeEndX := bar_index
+        if showTP_SL_Lines
+            setTradeRight(tradeEndX + 10)
+
+// === ALERTS ===
+alertcondition(longSignal, title="Long EMA Cross", message="Long EMA Crossover Signal")
+alertcondition(shortSignal, title="Short EMA Cross", message="Short Crossover Signal")
+alertcondition(bullBreak, title="Bullish BOS", message="Bullish Break of Structure")
+alertcondition(bearBreak, title="Bearish BOS", message="Bearish Break of Structure")
+
+// Multi-timeframe data for trend analysis
+tf1Bullish = isTFBullish(combinedTrendTF1)
+tf2Bullish = isTFBullish(combinedTrendTF2)
+tf3Bullish = isTFBullish(combinedTrendTF3)
+
+// === SCREENER DASHBOARD ===
+if showScreener and barstate.islast
+    var table screenerTable = table.new(getTablePosition(screenerPosition), 2, 3,
+         bgcolor = color.new(color.rgb(33, 33, 33), 80),
+         border_width = 2, border_color = color.new(widgetBorderColor, 0),
+         frame_width = 3, frame_color = color.new(widgetBorderColor, 0))
+
+    // Header row — BOLD
+    table.cell(screenerTable, 0, 0, "𝗦𝗖𝗥𝗘𝗘𝗡𝗘𝗥", text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.normal, text_halign=text.align_center)
+    table.merge_cells(screenerTable, 0, 0, 1, 0)
+
+    // Label row
+    table.cell(screenerTable, 0, 1, "Long",  text_color=color.black, bgcolor=color.new(#2dff03, 0), text_size=size.small, text_halign=text.align_center)
+    table.cell(screenerTable, 1, 1, "Short", text_color=color.black, bgcolor=color.new(#ff0303, 0), text_size=size.small, text_halign=text.align_center)
+
+    // Signal row
+    longColor  = ribbonDir ? color.new(#1efd00, 0) : color.new(#ffd600,0)
+    shortColor = not ribbonDir ? color.new(#d50000,0) : color.new(#ffd600,0)
+    longText   = ribbonDir ? "Long" : "No Signal"
+    shortText  = not ribbonDir ? "Short" : "No Signal"
+    table.cell(screenerTable, 0, 2, longText,  text_color=color.black, bgcolor=longColor,  text_size=size.small, text_halign=text.align_center)
+    table.cell(screenerTable, 1, 2, shortText, text_color=color.black, bgcolor=shortColor, text_size=size.small, text_halign=text.align_center)
+
+// === TREND ANALYSIS DASHBOARD ===
+if showDashboard and barstate.islast
+    var table dashboardTable = table.new(getTablePosition(dashboardPosition), 2, 5,
+         bgcolor = color.new(color.rgb(33, 33, 33), 80),
+         border_width = 2, border_color = color.new(widgetBorderColor, 0),
+         frame_width = 3, frame_color = color.new(widgetBorderColor, 0))
+
+    // Header
+    table.cell(dashboardTable, 0, 0, "𝗧𝗥𝗘𝗡𝗗 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦", text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.normal, text_halign=text.align_center)
+    table.merge_cells(dashboardTable, 0, 0, 1, 0)
+
+    // Combined status based on selected timeframes
+    bullishCount = (tf1Bullish ? 1 : 0) + (tf2Bullish ? 1 : 0) + (tf3Bullish ? 1 : 0)
+    isOverallBullish = bullishCount >= 2
+    combinedColor = isOverallBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
+
+    statusEmoji = isOverallBullish ? "𝗕𝘂𝗹𝗹𝗶𝘀𝗵 🐂" : "𝗕𝗲𝗮𝗿𝗶𝘀𝗵 🐻"
+    table.cell(dashboardTable, 0, 1, "𝗦𝗧𝗔𝗧𝗨𝗦", text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.small)
+    table.cell(dashboardTable, 1, 1, statusEmoji, text_color=color.black, bgcolor=combinedColor, text_size=size.small)
+
+    // Individual timeframes
+    table.cell(dashboardTable, 0, 2, getTFLabel(combinedTrendTF1), text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.small)
+    table.cell(dashboardTable, 1, 2, tf1Bullish ? "Bullish" : "Bearish", text_color=color.black, bgcolor=tf1Bullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0), text_size=size.small)
+
+    table.cell(dashboardTable, 0, 3, getTFLabel(combinedTrendTF2), text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.small)
+    table.cell(dashboardTable, 1, 3, tf2Bullish ? "Bullish" : "Bearish", text_color=color.black, bgcolor=tf2Bullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0), text_size=size.small)
+
+    table.cell(dashboardTable, 0, 4, getTFLabel(combinedTrendTF3), text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.small)
+    table.cell(dashboardTable, 1, 4, tf3Bullish ? "Bullish" : "Bearish", text_color=color.black, bgcolor=tf3Bullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0), text_size=size.small)
+
+// === MARKET ANALYSIS DASHBOARD ===
+if showMarket and barstate.islast
+    var table marketTable = table.new(getTablePosition(marketPosition), 2, showVolumeRow ? 3 : 2,
+         bgcolor = color.new(color.rgb(33, 33, 33), 80),
+         border_width = 2, border_color = color.new(widgetBorderColor, 0),
+         frame_width = 3, frame_color = color.new(widgetBorderColor, 0))
+
+    table.cell(marketTable, 0, 0, "𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦", text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.normal, text_halign=text.align_center)
+    table.merge_cells(marketTable, 0, 0, 1, 0)
+
+    momentumText  = ribbonDir ? "UPTREND" : "DOWNTREND"
+    momentumColor = ribbonDir ? color.new(#00c853,0) : color.new(#d50000,0)
+    table.cell(marketTable, 0, 1, "Momentum", text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.small)
+    table.cell(marketTable, 1, 1, momentumText, text_color=color.black, bgcolor=momentumColor, text_size=size.small)
+
+    if showVolumeRow
+        volText = na(volume) ? "N/A" : str.tostring(math.round(volume))
+        table.cell(marketTable, 0, 2, "Volume", text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.small)
+        table.cell(marketTable, 1, 2, volText, text_color=color.white, bgcolor=color.new(#212121,0), text_size=size.small)
