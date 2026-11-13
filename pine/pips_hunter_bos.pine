@@ -49,6 +49,8 @@ combinedTrendTF3 = input.string("60", "Trend Timeframe 3", options=["5", "15", "
 showMarket = input.bool(true, "Show Market Analysis", group="Market Analysis Settings")
 marketPosition = input.string("Bottom Left", "Market Analysis Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"], group="Market Analysis Settings")
 showVolumeRow = input.bool(true, "Show Volume Row", group="Market Analysis Settings")
+adxLen = input.int(14, "ADX Length", minval=1, group="Market Analysis Settings")
+adxThreshold = input.float(20.0, "ADX Trending Level", minval=0, step=0.5, group="Market Analysis Settings", tooltip="ADX below this level is shown as Sideways.")
 
 // Unified Border Color Input
 widgetBorderColor = input.color(#000000, "Screener & Dashboard border's colors", group="Widget Style", tooltip="Changes all borders and outlines for both screener and dashboard")
@@ -68,6 +70,7 @@ type Zone
 
 // === SHARED STATE ===
 atr = ta.atr(atrLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
 var array<Zone> zones = array.new<Zone>()
 
 // === HELPER FUNCTIONS ===
@@ -167,6 +170,7 @@ var int lastPHBar = na
 var int lastPLBar = na
 var bool phBroken = true
 var bool plBroken = true
+var int structDir = 0
 
 ph = ta.pivothigh(high, swingLen, swingLen)
 pl = ta.pivotlow(low, swingLen, swingLen)
@@ -190,12 +194,14 @@ bearBreak = not plBroken and close < lastPL
 
 if bullBreak
     phBroken := true
+    structDir := 1
     if showBOS
         line.new(lastPHBar, lastPH, bar_index, lastPH, color=bosColor, width=1)
         label.new(int(math.avg(lastPHBar, bar_index)), lastPH, "BOS", style=label.style_none, textcolor=bosColor, size=size.small)
 
 if bearBreak
     plBroken := true
+    structDir := -1
     if showBOS
         line.new(lastPLBar, lastPL, bar_index, lastPL, color=bosColor, width=1)
         label.new(int(math.avg(lastPLBar, bar_index)), lastPL, "BOS", style=label.style_none, textcolor=bosColor, size=size.small)
@@ -451,20 +457,74 @@ if showDashboard and barstate.islast
 
 // === MARKET ANALYSIS DASHBOARD ===
 if showMarket and barstate.islast
-    var table marketTable = table.new(getTablePosition(marketPosition), 2, showVolumeRow ? 3 : 2,
+    var table marketTable = table.new(getTablePosition(marketPosition), 2, showVolumeRow ? 8 : 7,
          bgcolor = color.new(color.rgb(33, 33, 33), 80),
          border_width = 2, border_color = color.new(widgetBorderColor, 0),
          frame_width = 3, frame_color = color.new(widgetBorderColor, 0))
+    color headBg = color.new(#03f7ff, 0)
+    color upBg   = color.new(#00c853, 0)
+    color downBg = color.new(#d50000, 0)
+    color waitBg = color.new(#ffd600, 0)
+    color darkBg = color.new(#212121, 0)
 
-    table.cell(marketTable, 0, 0, "𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦", text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.normal, text_halign=text.align_center)
+    table.cell(marketTable, 0, 0, "𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦", text_color=color.black, bgcolor=headBg, text_size=size.normal, text_halign=text.align_center)
     table.merge_cells(marketTable, 0, 0, 1, 0)
 
+    // Momentum: direction of the EMA ribbon on this timeframe
     momentumText  = ribbonDir ? "UPTREND" : "DOWNTREND"
-    momentumColor = ribbonDir ? color.new(#00c853,0) : color.new(#d50000,0)
-    table.cell(marketTable, 0, 1, "Momentum", text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.small)
+    momentumColor = ribbonDir ? upBg : downBg
+    table.cell(marketTable, 0, 1, "Momentum", text_color=color.black, bgcolor=headBg, text_size=size.small)
     table.cell(marketTable, 1, 1, momentumText, text_color=color.black, bgcolor=momentumColor, text_size=size.small)
+
+    // Strength: how strongly the market is moving (not which way)
+    bool trending = adx >= adxThreshold
+    string adxState = adx >= 40 ? " Very Strong" : adx >= 25 ? " Strong" : trending ? " Trending" : " Sideways"
+    table.cell(marketTable, 0, 2, "Strength (ADX)", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 2, str.tostring(adx, "#.0") + adxState, text_color=color.black, bgcolor=trending ? upBg : waitBg, text_size=size.small)
+
+    // Structure: direction of the most recent break of structure
+    string structText = structDir > 0 ? "BULLISH BOS" : structDir < 0 ? "BEARISH BOS" : "No BOS yet"
+    color structColor = structDir > 0 ? upBg : structDir < 0 ? downBg : waitBg
+    table.cell(marketTable, 0, 3, "Structure", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 3, structText, text_color=color.black, bgcolor=structColor, text_size=size.small)
+
+    // Zones: where price sits relative to the active supply / demand zones
+    bool inSupply = false
+    bool inDemand = false
+    float nearSupBot = na
+    float nearSupTop = na
+    float nearDemBot = na
+    float nearDemTop = na
+    if array.size(zones) > 0
+        for i = 0 to array.size(zones) - 1
+            Zone mz = array.get(zones, i)
+            bool priceInside = close <= mz.top and close >= mz.bot
+            if mz.dir < 0
+                if priceInside
+                    inSupply := true
+                if mz.top >= close and (na(nearSupBot) or mz.bot < nearSupBot)
+                    nearSupBot := mz.bot
+                    nearSupTop := mz.top
+            else
+                if priceInside
+                    inDemand := true
+                if mz.bot <= close and (na(nearDemTop) or mz.top > nearDemTop)
+                    nearDemBot := mz.bot
+                    nearDemTop := mz.top
+
+    string posText = inSupply ? "Inside SUPPLY" : inDemand ? "Inside DEMAND" : "Between zones"
+    color posColor = inSupply ? color.new(supplyColor, 0) : inDemand ? color.new(demandColor, 0) : darkBg
+    table.cell(marketTable, 0, 4, "Price Position", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 4, posText, text_color=color.white, bgcolor=posColor, text_size=size.small)
+
+    string supText = na(nearSupBot) ? "No zone above" : str.tostring(nearSupBot, format.mintick) + " - " + str.tostring(nearSupTop, format.mintick)
+    string demText = na(nearDemTop) ? "No zone below" : str.tostring(nearDemBot, format.mintick) + " - " + str.tostring(nearDemTop, format.mintick)
+    table.cell(marketTable, 0, 5, "Nearest Supply", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 5, supText, text_color=color.white, bgcolor=color.new(supplyColor, 0), text_size=size.small)
+    table.cell(marketTable, 0, 6, "Nearest Demand", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 6, demText, text_color=color.white, bgcolor=color.new(demandColor, 0), text_size=size.small)
 
     if showVolumeRow
         volText = na(volume) ? "N/A" : str.tostring(math.round(volume))
-        table.cell(marketTable, 0, 2, "Volume", text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.small)
-        table.cell(marketTable, 1, 2, volText, text_color=color.white, bgcolor=color.new(#212121,0), text_size=size.small)
+        table.cell(marketTable, 0, 7, "Volume", text_color=color.black, bgcolor=headBg, text_size=size.small)
+        table.cell(marketTable, 1, 7, volText, text_color=color.white, bgcolor=darkBg, text_size=size.small)
