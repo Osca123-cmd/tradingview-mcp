@@ -9,6 +9,7 @@
 //   4. Order blocks and fair value gaps: every mitigated item is removed on the same bar (the removal loop no longer skips items).
 //   5. Order blocks: optional labels, optional "trend direction only" filter, swing order blocks shown by default.
 //   6. Added an information panel (trend, premium/discount position, nearest order blocks, bias).
+//   7. Added BUY / SELL labels (order block retest and internal CHoCH in the trend direction) with alerts.
 
 //@version=5
 indicator('Smart Money Concepts [LuxAlgo] - Modified', 'SMC LuxAlgo Mod', overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500)
@@ -61,6 +62,15 @@ GAPS_GROUP                      = 'Fair Value Gaps'
 LEVELS_GROUP                    = 'Highs & Lows MTF'
 ZONES_GROUP                     = 'Premium & Discount Zones'
 PANEL_GROUP                     = 'Information Panel'
+SIGNALS_GROUP                   = 'Buy / Sell Labels'
+
+SIGNAL_BOTH                     = 'Both'
+SIGNAL_RETEST                   = 'Order Block Retest'
+SIGNAL_CHOCH                    = 'Internal CHoCH'
+
+FILTER_SWING                    = 'Swing Trend'
+FILTER_INTERNAL                 = 'Internal Trend'
+FILTER_NONE                     = 'None'
 
 modeTooltip                     = 'Allows to display historical Structure or only the recent ones'
 styleTooltip                    = 'Indicator color theme'
@@ -86,6 +96,10 @@ fairValueGapsTimeframeTooltip   = 'Fair value gaps timeframe'
 fairValueGapsExtendTooltip      = 'Determine how many bars to extend the Fair Value Gap boxes on chart'
 showPremiumDiscountZonesTooltip = 'Display premium, discount, and equilibrium zones on chart'
 showPanelTooltip                = 'Display a summary of trend, premium/discount position, nearest order blocks and bias'
+showSignalsTooltip              = 'Display BUY and SELL labels on the chart. Labels appear when the candle closes'
+signalSourceTooltip             = 'Order Block Retest: price dips into an order block and closes back out of it\n\nInternal CHoCH: internal structure turns back in the direction of the trend'
+signalTrendFilterTooltip        = 'Only give BUY labels in a bullish trend and SELL labels in a bearish trend'
+signalCooldownTooltip           = 'Minimum number of bars between two labels of the same direction'
 
 modeInput                       = input.string( HISTORICAL, 'Mode',                     group = SMART_GROUP,    tooltip = modeTooltip, options = [HISTORICAL, PRESENT])
 styleInput                      = input.string( COLORED,    'Style',                    group = SMART_GROUP,    tooltip = styleTooltip,options = [COLORED, MONOCHROME])
@@ -152,6 +166,11 @@ discountZoneColorInput          = input.color(  GREEN,      'Discount Zone',    
 
 showPanelInput                  = input(        true,       'Show Panel',               group = PANEL_GROUP,    tooltip = showPanelTooltip)
 panelPositionInput              = input.string( 'Top Right', 'Position',                group = PANEL_GROUP,    options = ['Top Left', 'Top Right', 'Bottom Left', 'Bottom Right'])
+
+showSignalsInput                = input(        true,       'Show BUY / SELL Labels',   group = SIGNALS_GROUP,  tooltip = showSignalsTooltip)
+signalSourceInput               = input.string( SIGNAL_BOTH, 'Signal Source',           group = SIGNALS_GROUP,  tooltip = signalSourceTooltip,      options = [SIGNAL_BOTH, SIGNAL_RETEST, SIGNAL_CHOCH])
+signalTrendFilterInput          = input.string( FILTER_SWING, 'Trend Filter',           group = SIGNALS_GROUP,  tooltip = signalTrendFilterTooltip, options = [FILTER_SWING, FILTER_INTERNAL, FILTER_NONE])
+signalCooldownInput             = input.int(    5,          'Bars Between Labels',      group = SIGNALS_GROUP,  tooltip = signalCooldownTooltip,    minval = 1, maxval = 200)
 
 //---------------------------------------------------------------------------------------------------------------------}
 //DATA STRUCTURES & VARIABLES
@@ -651,6 +670,19 @@ nearestOrderBlock(array<orderBlock> orderBlocks, int bias, orderBlock current) =
                     result := eachOrderBlock
     result
 
+// ADDED: true when the current candle dips into an order block of the given bias and closes back out of it
+orderBlockRetest(array<orderBlock> orderBlocks, int bias) =>
+    bool result = false
+    for eachOrderBlock in orderBlocks
+        if eachOrderBlock.bias == bias
+            if bias == BULLISH and low <= eachOrderBlock.barHigh and close > eachOrderBlock.barHigh and close > open
+                result := true
+                break
+            else if bias == BEARISH and high >= eachOrderBlock.barLow and close < eachOrderBlock.barLow and close < open
+                result := true
+                break
+    result
+
 // ADDED: table position from the input text
 getPanelPosition(string positionText) =>
     switch positionText
@@ -689,10 +721,10 @@ getCurrentStructure(internalLengthInput,false,true)
 if showEqualHighsLowsInput
     getCurrentStructure(equalHighsLowsLengthInput,true)
 
-if showInternalsInput or showInternalOrderBlocksInput or showTrendInput or showPanelInput
+if showInternalsInput or showInternalOrderBlocksInput or showTrendInput or showPanelInput or showSignalsInput
     displayStructure(true)
 
-if showStructureInput or showSwingOrderBlocksInput or showHighLowSwingsInput or showPanelInput
+if showStructureInput or showSwingOrderBlocksInput or showHighLowSwingsInput or showPanelInput or showSignalsInput
     displayStructure()
 
 if showInternalOrderBlocksInput
@@ -703,6 +735,44 @@ if showSwingOrderBlocksInput
 
 if showFairValueGapsInput
     drawFairValueGaps()
+
+// ADDED: BUY / SELL labels
+var int lastBuyBar          = na
+var int lastSellBar         = na
+var string lastSignalText   = 'None yet'
+
+useRetestSignal = signalSourceInput != SIGNAL_CHOCH
+useChochSignal  = signalSourceInput != SIGNAL_RETEST
+
+internalBullishRetest   = orderBlockRetest(internalOrderBlocks, BULLISH)
+swingBullishRetest      = orderBlockRetest(swingOrderBlocks, BULLISH)
+internalBearishRetest   = orderBlockRetest(internalOrderBlocks, BEARISH)
+swingBearishRetest      = orderBlockRetest(swingOrderBlocks, BEARISH)
+
+retestBuy   = useRetestSignal and (internalBullishRetest or swingBullishRetest)
+retestSell  = useRetestSignal and (internalBearishRetest or swingBearishRetest)
+chochBuy    = useChochSignal and currentAlerts.internalBullishCHoCH
+chochSell   = useChochSignal and currentAlerts.internalBearishCHoCH
+
+signalTrendBias = signalTrendFilterInput == FILTER_SWING ? swingTrend.bias : internalTrend.bias
+trendAllowsBuy  = signalTrendFilterInput == FILTER_NONE or signalTrendBias == BULLISH
+trendAllowsSell = signalTrendFilterInput == FILTER_NONE or signalTrendBias == BEARISH
+
+buyCooledDown   = na(lastBuyBar) or bar_index - lastBuyBar >= signalCooldownInput
+sellCooledDown  = na(lastSellBar) or bar_index - lastSellBar >= signalCooldownInput
+
+buySignal   = showSignalsInput and barstate.isconfirmed and (retestBuy or chochBuy) and trendAllowsBuy and buyCooledDown
+sellSignal  = showSignalsInput and barstate.isconfirmed and (retestSell or chochSell) and trendAllowsSell and sellCooledDown and not buySignal
+
+if buySignal
+    lastBuyBar      := bar_index
+    lastSignalText  := retestBuy ? 'BUY (OB retest)' : 'BUY (CHoCH)'
+    label.new(bar_index, low, 'BUY', style = label.style_label_up, color = GREEN, textcolor = color.white, size = size.small)
+
+if sellSignal
+    lastSellBar     := bar_index
+    lastSignalText  := retestSell ? 'SELL (OB retest)' : 'SELL (CHoCH)'
+    label.new(bar_index, high, 'SELL', style = label.style_label_down, color = RED, textcolor = color.white, size = size.small)
 
 if barstate.islastconfirmedhistory or barstate.islast
     if showInternalOrderBlocksInput
@@ -729,7 +799,7 @@ if barstate.islastconfirmedhistory or (barstate.isrealtime and newBar)
 //INFORMATION PANEL (ADDED)
 //---------------------------------------------------------------------------------------------------------------------{
 if showPanelInput and barstate.islast
-    var table infoPanel = table.new(getPanelPosition(panelPositionInput), 2, 7, bgcolor = #131722, border_color = #2a2e39, border_width = 1, frame_color = #2a2e39, frame_width = 1)
+    var table infoPanel = table.new(getPanelPosition(panelPositionInput), 2, 8, bgcolor = #131722, border_color = #2a2e39, border_width = 1, frame_color = #2a2e39, frame_width = 1)
 
     table.cell(infoPanel, 0, 0, 'SMART MONEY CONCEPTS', text_color = color.white, bgcolor = #1e222d, text_size = size.small, text_halign = text.align_center)
     table.merge_cells(infoPanel, 0, 0, 1, 0)
@@ -793,6 +863,7 @@ if showPanelInput and barstate.islast
     else if swingTrend.bias == BEARISH
         biasText    := 'Bearish, wait for premium'
     panelRow(infoPanel, 6, 'Bias', biasText, biasColor)
+    panelRow(infoPanel, 7, 'Last signal', lastSignalText, color.white)
 
 //---------------------------------------------------------------------------------------------------------------------}
 //ALERTS
@@ -817,5 +888,8 @@ alertcondition(currentAlerts.equalLows,                 'Equal Lows',           
 
 alertcondition(currentAlerts.bullishFairValueGap,       'Bullish FVG',                  'Bullish FVG formed')
 alertcondition(currentAlerts.bearishFairValueGap,       'Bearish FVG',                  'Bearish FVG formed')
+
+alertcondition(buySignal,                               'BUY Label',                    'BUY signal')
+alertcondition(sellSignal,                              'SELL Label',                   'SELL signal')
 
 //---------------------------------------------------------------------------------------------------------------------}
