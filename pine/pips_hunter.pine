@@ -33,6 +33,9 @@ atrrMultiplier = input.float(2, "ATR Multiplier for SL", minval=0.1, step=0.1, g
 atrrTPFactor = input.float(1.0, "TP Multiplier (relative to SL)", minval=0.1, step=0.1, group="Trade Management")
 atrLen = input.int(14, "ATR Length", minval=1, group="Trade Management")
 showTP_SL_Lines = input.bool(true, "Show TP/SL Lines & Boxes", group="Trade Management")
+lockSignal   = input.bool(true, "Keep Signal Until It Finishes (SL or last TP)", group="Trade Management", tooltip="While a signal is still running, no new signal is given. The next signal can only appear after the stop loss or the last take profit is hit.")
+allowReverse = input.bool(false, "Let An Opposite Signal Replace A Running One", group="Trade Management", tooltip="Only used when the option above is on. Off = a running Buy is never replaced by a Sell (and reverse) until it finishes.")
+maxTradeBars = input.int(0, "End A Stuck Signal After (bars, 0 = never)", minval=0, maxval=5000, group="Trade Management", tooltip="A signal that reaches neither its stop loss nor its last take profit blocks new signals. Set a number of bars to release it automatically.")
 
 // Supply & Demand (defaults tuned for M3 / M5)
 showZones     = input.bool(true, "Enable Supply & Demand Zones", group="Supply & Demand")
@@ -426,9 +429,12 @@ if rawShort
     pendingBar := bar_index
 
 barOK = not confirmOnClose or barstate.isconfirmed
+// A running signal blocks new ones until it finishes (SL or last TP), so a signal never moves mid-trade.
+lockLongOK  = not lockSignal or not tradeActive or (allowReverse and tradeDirection == -1)
+lockShortOK = not lockSignal or not tradeActive or (allowReverse and tradeDirection == 1)
 pendingValid = pendingDir != 0 and bar_index - pendingBar <= signalWindow
-crossLong  = barOK and pendingValid and pendingDir == 1 and ribbonDir and longFiltersOK
-crossShort = barOK and pendingValid and pendingDir == -1 and not ribbonDir and shortFiltersOK
+crossLong  = barOK and pendingValid and pendingDir == 1 and ribbonDir and longFiltersOK and lockLongOK
+crossShort = barOK and pendingValid and pendingDir == -1 and not ribbonDir and shortFiltersOK and lockShortOK
 
 // Trend continuation: price pulled back to the fast EMA, then resumed with the trend.
 var int lastSignalBar = na
@@ -439,8 +445,8 @@ cooledDown = na(lastSignalBar) or bar_index - lastSignalBar >= cooldownBars
 // A same-direction re-entry is only allowed once the running trade is finished or already reached TP1.
 canLong  = not tradeActive or tradeDirection != 1 or tp1Done
 canShort = not tradeActive or tradeDirection != -1 or tp1Done
-contLong  = useContinuation and barOK and cooledDown and canLong and ribbonDir and emaFast > emaFast[1] and touchedFromAbove and close > emaFast and close > high[1] and longFiltersOK
-contShort = useContinuation and barOK and cooledDown and canShort and not ribbonDir and emaFast < emaFast[1] and touchedFromBelow and close < emaFast and close < low[1] and shortFiltersOK
+contLong  = useContinuation and barOK and cooledDown and canLong and lockLongOK and ribbonDir and emaFast > emaFast[1] and touchedFromAbove and close > emaFast and close > high[1] and longFiltersOK
+contShort = useContinuation and barOK and cooledDown and canShort and lockShortOK and not ribbonDir and emaFast < emaFast[1] and touchedFromBelow and close < emaFast and close < low[1] and shortFiltersOK
 
 longSignal  = crossLong or (contLong and not crossShort)
 shortSignal = not longSignal and (crossShort or contShort)
@@ -551,6 +557,10 @@ if tradeActive and bar_index > tradeStartBar
         if allTPsHit
             tradeActive := false
             tradeEndX := bar_index
+        else if maxTradeBars > 0 and bar_index - tradeStartBar >= maxTradeBars
+            // neither SL nor the last TP was reached in time: release the signal without counting it
+            tradeActive := false
+            tradeEndX := bar_index
 
 // Keep drawings extended while the trade is live, freeze them once it ends
 if showTP_SL_Lines and (tradeActive or not na(tradeEndX))
@@ -653,7 +663,7 @@ if showDashboard and barstate.islast
 
 // === MARKET ANALYSIS DASHBOARD ===
 if showMarket and barstate.islast
-    var table marketTable = table.new(position.bottom_left, 2, 9, bgcolor=color.new(color.rgb(33, 33, 33), 80), border_width=2, border_color=color.new(widgetBorderColor, 0), frame_width=3, frame_color=color.new(widgetBorderColor, 0))
+    var table marketTable = table.new(position.bottom_left, 2, 10, bgcolor=color.new(color.rgb(33, 33, 33), 80), border_width=2, border_color=color.new(widgetBorderColor, 0), frame_width=3, frame_color=color.new(widgetBorderColor, 0))
     color headBg = color.new(#03f7ff, 0)
     color darkBg = color.new(#212121, 0)
     color upBg   = color.new(#00c853, 0)
@@ -712,3 +722,18 @@ if showMarket and barstate.islast
 
     table.cell(marketTable, 0, 8, "Volume", text_color=color.black, bgcolor=headBg, text_size=size.small)
     table.cell(marketTable, 1, 8, str.tostring(math.round(volume)), text_color=color.white, bgcolor=darkBg, text_size=size.small)
+
+    // The signal that is currently running, and how many targets it has reached
+    int tpsReached = 0
+    for hit in tpHitStatus
+        if hit
+            tpsReached += 1
+    string tradeText = "No running signal"
+    color tradeBg = darkBg
+    color tradeTextColor = color.white
+    if tradeActive
+        tradeText := (tradeDirection > 0 ? "BUY running" : "SELL running") + " (TP " + str.tostring(tpsReached) + "/" + str.tostring(array.size(tpHitStatus)) + ")"
+        tradeBg := tradeDirection > 0 ? upBg : downBg
+        tradeTextColor := color.black
+    table.cell(marketTable, 0, 9, "Signal Status", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 9, tradeText, text_color=tradeTextColor, bgcolor=tradeBg, text_size=size.small)
