@@ -2,7 +2,7 @@
 // ©️ @traderschatroom88
 //wolfsg88
 //@version=6
-indicator("PIPS HUNTER", overlay=true, scale=scale.right, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+indicator("PIPS HUNTER", overlay=true, scale=scale.right, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=500)
 
 // === INPUTS ===
 showRibbon = input.bool(true, "Show EMA Ribbon", group="EMA Settings")
@@ -51,6 +51,30 @@ marketPosition = input.string("Bottom Left", "Market Analysis Position", options
 showVolumeRow = input.bool(true, "Show Volume Row", group="Market Analysis Settings")
 adxLen = input.int(14, "ADX Length", minval=1, group="Market Analysis Settings")
 adxThreshold = input.float(20.0, "ADX Trending Level", minval=0, step=0.5, group="Market Analysis Settings", tooltip="ADX below this level is shown as Sideways.")
+trendEmaLen = input.int(200, "Trend EMA Length (Entry Bias)", minval=1, group="Market Analysis Settings", tooltip="Only used by the Entry Bias row of the Market Analysis table. It does not change the entry signals.")
+
+// Market Analysis zone tracker (feeds Price Position / Nearest Supply / Nearest Demand; never changes the entry signals)
+maDrawZones   = input.bool(true, "Draw Nearest Zones On Chart", group="Market Analysis Zones", tooltip="Draws the zones named in the Market Analysis table, so the prices in the table can be seen on the chart.")
+maShowZones     = input.bool(true, "Track Supply & Demand For Market Analysis", group="Market Analysis Zones")
+useRejection  = input.bool(true, "Detect: Repeated Rejections (fastest)", group="Market Analysis Zones", tooltip="Draws a zone as soon as several candles are held at the same level and close back away from it.")
+rejMinTouches = input.int(2, "   Rejections Needed", minval=2, maxval=6, group="Market Analysis Zones", tooltip="How many candles must be held at the same level. 2 = fastest, 3-4 = stricter.")
+rejLookback   = input.int(8, "   Rejection Lookback (bars)", minval=3, maxval=30, group="Market Analysis Zones")
+rejTol        = input.float(0.15, "   Same-Level Tolerance (x ATR)", minval=0.02, step=0.01, group="Market Analysis Zones")
+useStructure  = input.bool(true, "Detect: Trend Structure (fresh zones in strong trends)", group="Market Analysis Zones", tooltip="When price closes at a new low, the last pullback high becomes a fresh supply zone (and the reverse for demand). Keeps producing new zoneList while a strong trend runs.")
+structLen     = input.int(10, "   Structure Length (bars)", minval=4, maxval=50, group="Market Analysis Zones")
+useBase       = input.bool(true, "Detect: Base + Impulse Candle", group="Market Analysis Zones", tooltip="The small candle(s) right before an explosive candle. Appears when the explosive candle closes.")
+impulseCandle = input.float(1.3, "   Impulse Candle Body (x ATR)", minval=0.5, step=0.1, group="Market Analysis Zones")
+usePivot      = input.bool(true, "Detect: Swing Pivots", group="Market Analysis Zones", tooltip="Confirmed swing highs/lows. Appears Swing Length bars after the swing.")
+maSwingLen      = input.int(5, "   Swing Length", minval=2, maxval=50, group="Market Analysis Zones")
+impulseMult   = input.float(1.5, "   Minimum Move Away (x ATR)", minval=0, step=0.1, group="Market Analysis Zones")
+zoneMinWidth  = input.float(0.2, "Minimum Zone Height (x ATR)", minval=0.05, step=0.05, group="Market Analysis Zones")
+zoneMaxWidth  = input.float(0.6, "Maximum Zone Height (x ATR)", minval=0.1, step=0.1, group="Market Analysis Zones", tooltip="Caps how thick a zone can be. Lower = tighter, more precise zoneList.")
+maMaxZones      = input.int(1, "Zones Drawn Per Side (nearest to price)", minval=1, maxval=20, group="Market Analysis Zones")
+maxStored     = input.int(30, "Zones Tracked Per Side", minval=5, maxval=100, group="Market Analysis Zones", tooltip="Zones remembered in the background. Only the nearest ones are drawn; the rest appear automatically when price moves toward them.")
+flipZones     = input.bool(true, "Flip Broken Zones (demand becomes supply, and reverse)", group="Market Analysis Zones")
+breakMode     = input.string("Close", "Zone Broken By", options=["Close", "Wick"], group="Market Analysis Zones")
+showBroken    = input.bool(false, "Keep Broken Zones (grey)", group="Market Analysis Zones")
+zoneExtend    = input.int(20, "Extend Zones Right (bars)", minval=1, maxval=200, group="Market Analysis Zones")
 
 // Unified Border Color Input
 widgetBorderColor = input.color(#000000, "Screener & Dashboard border's colors", group="Widget Style", tooltip="Changes all borders and outlines for both screener and dashboard")
@@ -71,6 +95,7 @@ type Zone
 // === SHARED STATE ===
 atr = ta.atr(atrLen)
 [diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+maEmaTrend = ta.ema(close, trendEmaLen)
 var array<Zone> zones = array.new<Zone>()
 
 // === HELPER FUNCTIONS ===
@@ -233,6 +258,290 @@ if barstate.islast and array.size(zones) > 0
     for i = 0 to array.size(zones) - 1
         label.set_x(array.get(zones, i).tag, bar_index + 10)
 
+// === MARKET ANALYSIS ZONE TRACKER (does not affect entry signals) ===
+type MaZone
+    box   bx
+    float top
+    float bottom
+    bool  isSupply
+    int   tests = 0
+    bool  inside = false
+    bool  flipped = false
+
+var array<MaZone> maSupplyZones = array.new<MaZone>()
+var array<MaZone> maDemandZones = array.new<MaZone>()
+
+zoneText(MaZone z) =>
+    (z.isSupply ? "NEAREST SUPPLY" : "NEAREST DEMAND") + (z.flipped ? " (flip)" : "") + (z.tests > 0 ? " • test " + str.tostring(z.tests) : "")
+
+zoneOverlaps(array<MaZone> zoneList, float top, float bottom) =>
+    bool res = false
+    for z in zoneList
+        if top >= z.bottom and bottom <= z.top
+            res := true
+            break
+    res
+
+// Adds a zone. If it overlaps an existing zone on the same side, the existing zone is kept
+// (and widened to cover both when that stays within the maximum height) instead of stacking duplicates.
+addZone(array<MaZone> zoneList, float top, float bottom, int leftBar, bool isSupply, float maxHeight) =>
+    bool merged = false
+    for z in zoneList
+        if top >= z.bottom and bottom <= z.top
+            merged := true
+            float newTop = math.max(top, z.top)
+            float newBottom = math.min(bottom, z.bottom)
+            if newTop - newBottom <= maxHeight
+                z.top := newTop
+                z.bottom := newBottom
+                box.set_top(z.bx, newTop)
+                box.set_bottom(z.bx, newBottom)
+            break
+    if not merged
+        color c = isSupply ? supplyColor : demandColor
+        box b = box.new(leftBar, top, bar_index + zoneExtend, bottom, border_color=color.new(c, 40), border_width=1, bgcolor=color.new(c, 80), text=isSupply ? "NEAREST SUPPLY" : "NEAREST DEMAND", text_color=color.new(c, 0), text_size=size.small, text_halign=text.align_right, text_valign=text.align_center)
+        zoneList.push(MaZone.new(b, top, bottom, isSupply))
+        if zoneList.size() > maxStored
+            MaZone old = zoneList.shift()
+            box.delete(old.bx)
+    not merged
+
+// Tracks every stored zone on every bar: counts retests, and retires or flips broken zoneList.
+// Returns [price is inside a zone, a zone was freshly tested on this bar]
+updateZones(array<MaZone> zoneList, array<MaZone> other, bool isSupply) =>
+    bool priceInside = false
+    bool newTest = false
+    int i = zoneList.size() - 1
+    while i >= 0
+        MaZone z = zoneList.get(i)
+        bool broken = false
+        if breakMode == "Close"
+            // only a finished candle can break a zone, so zoneList do not flicker on a live candle
+            broken := barstate.isconfirmed and (isSupply ? close > z.top : close < z.bottom)
+        else
+            broken := isSupply ? high > z.top : low < z.bottom
+        if broken
+            zoneList.remove(i)
+            if flipZones and not z.flipped and not zoneOverlaps(other, z.top, z.bottom)
+                // a broken demand becomes supply (and reverse), once
+                z.isSupply := not isSupply
+                z.flipped := true
+                z.tests := 0
+                z.inside := true
+                other.push(z)
+            else if showBroken
+                box.set_right(z.bx, bar_index)
+                box.set_bgcolor(z.bx, color.new(color.gray, 90))
+                box.set_border_color(z.bx, color.new(color.gray, 70))
+                box.set_text(z.bx, "")
+            else
+                box.delete(z.bx)
+        else
+            bool touching = isSupply ? high >= z.bottom : low <= z.top
+            if touching and not z.inside
+                z.tests += 1
+                newTest := true
+            z.inside := touching
+            if close <= z.top and close >= z.bottom
+                priceInside := true
+        i -= 1
+    [priceInside, newTest]
+
+// Draws only the zoneList nearest to price; the others stay tracked but hidden.
+renderZones(array<MaZone> zoneList, bool isSupply) =>
+    if zoneList.size() > 0
+        array<float> keys = array.new<float>()
+        for z in zoneList
+            keys.push(isSupply ? z.bottom : -z.top)
+        array<int> ranked = array.sort_indices(keys, order.ascending)
+        color c = isSupply ? supplyColor : demandColor
+        for [rank, idx] in ranked
+            MaZone z = zoneList.get(idx)
+            if maDrawZones and rank < maMaxZones
+                box.set_right(z.bx, bar_index + zoneExtend)
+                if bar_index - box.get_left(z.bx) > 4000
+                    box.set_left(z.bx, bar_index - 4000)
+                box.set_bgcolor(z.bx, color.new(c, z.tests == 0 ? 78 : 88))
+                box.set_border_color(z.bx, color.new(c, 40))
+                box.set_text_color(z.bx, color.new(c, 0))
+                box.set_text(z.bx, zoneText(z))
+            else
+                box.set_bgcolor(z.bx, color.new(c, 100))
+                box.set_border_color(z.bx, color.new(c, 100))
+                box.set_text(z.bx, "")
+
+// Nearest zone to current price on one side (na when there is none)
+nearestZone(array<MaZone> zoneList, bool isSupply) =>
+    MaZone res = na
+    for z in zoneList
+        if na(res)
+            res := z
+        else if isSupply ? z.bottom < res.bottom : z.top > res.top
+            res := z
+    res
+
+atrRef = nz(atr[1], atr)
+
+// --- Detection 1: repeated rejections (several candles held at the same level) ---
+// Returns [level, nearest candle-body edge, number of held candles, bars back to the first one]
+rejection(bool isTop, int len, float tol) =>
+    float level = isTop ? high : low
+    for k = 1 to len - 1
+        level := isTop ? math.max(level, high[k]) : math.min(level, low[k])
+    int count = 0
+    int firstOff = 0
+    float edge = na
+    for k = 0 to len - 1
+        bool touch = false
+        if isTop
+            touch := high[k] >= level - tol and close[k] < level - tol
+        else
+            touch := low[k] <= level + tol and close[k] > level + tol
+        if touch
+            count += 1
+            firstOff := k
+            float body = isTop ? math.max(open[k], close[k]) : math.min(open[k], close[k])
+            if na(edge)
+                edge := body
+            else
+                edge := isTop ? math.max(edge, body) : math.min(edge, body)
+    [level, edge, count, firstOff]
+
+[rejTopLevel, rejTopEdge, rejTopCount, rejTopOff] = rejection(true, rejLookback, atrRef * rejTol)
+[rejBotLevel, rejBotEdge, rejBotCount, rejBotOff] = rejection(false, rejLookback, atrRef * rejTol)
+
+// --- Detection 2: trend structure (the pullback that came before a new closing high/low) ---
+lowestPrev  = ta.lowest(low, structLen)[1]
+highestPrev = ta.highest(high, structLen)[1]
+int hhOff = nz(-ta.highestbars(high, structLen), 0)
+int llOff = nz(-ta.lowestbars(low, structLen), 0)
+breakDown = close < lowestPrev
+breakUp   = close > highestPrev
+// the extreme must be a real pullback peak/trough, not just the oldest candle of a one-way move
+peakOK   = hhOff >= 1 and high[hhOff] > high[hhOff + 1] and high[hhOff] > high[hhOff + 2]
+troughOK = llOff >= 1 and low[llOff] < low[llOff + 1] and low[llOff] < low[llOff + 2]
+structTop      = high[hhOff]
+structTopBody  = math.min(open[hhOff], close[hhOff])
+structBot      = low[llOff]
+structBotBody  = math.max(open[llOff], close[llOff])
+
+// --- Detection 3: base + impulse (the candles right before an explosive candle) ---
+baseInfo() =>
+    float bTop = math.max(open[1], close[1])
+    float bBot = math.min(open[1], close[1])
+    float wHi = high[1]
+    float wLo = low[1]
+    int bars = 1
+    bool small1 = math.abs(close[1] - open[1]) <= atrRef * 0.75
+    if small1
+        for k = 2 to 3
+            if math.abs(close[k] - open[k]) <= atrRef * 0.6
+                bTop := math.max(bTop, math.max(open[k], close[k]))
+                bBot := math.min(bBot, math.min(open[k], close[k]))
+                wHi := math.max(wHi, high[k])
+                wLo := math.min(wLo, low[k])
+                bars := k
+            else
+                break
+    [bTop, bBot, wHi, wLo, bars, small1]
+
+[baseTop, baseBot, baseHi, baseLo, baseBars, baseSmall] = baseInfo()
+bodySize    = math.abs(close - open)
+impulseUp   = close > open and bodySize >= atrRef * impulseCandle and (baseSmall or close[1] < open[1])
+impulseDown = close < open and bodySize >= atrRef * impulseCandle and (baseSmall or close[1] > open[1])
+
+// --- Detection 4: confirmed swing pivots (appear maSwingLen bars later) ---
+pivotHigh = ta.pivothigh(high, maSwingLen, maSwingLen)
+pivotLow  = ta.pivotlow(low, maSwingLen, maSwingLen)
+lowestSince  = ta.lowest(low, maSwingLen)
+highestSince = ta.highest(high, maSwingLen)
+
+bool inSupply = false
+bool inDemand = false
+bool supplyTested = false
+bool demandTested = false
+bool newSupplyZone = false
+bool newDemandZone = false
+
+if maShowZones
+    [_inS, _testS] = updateZones(maSupplyZones, maDemandZones, true)
+    [_inD, _testD] = updateZones(maDemandZones, maSupplyZones, false)
+    inSupply := _inS
+    inDemand := _inD
+    supplyTested := _testS
+    demandTested := _testD
+
+    // New zoneList are only created from finished candles
+    if barstate.isconfirmed and not na(atr)
+        float minH = atr * zoneMinWidth
+        float maxH = atr * zoneMaxWidth
+
+        // 1. Repeated rejections
+        if useRejection and rejTopCount >= rejMinTouches and not na(rejTopEdge)
+            float rTop = rejTopLevel
+            float rBottom = math.max(math.min(rejTopEdge, rTop - minH), rTop - maxH)
+            if close < rBottom
+                if addZone(maSupplyZones, rTop, rBottom, bar_index - rejTopOff, true, maxH)
+                    newSupplyZone := true
+
+        if useRejection and rejBotCount >= rejMinTouches and not na(rejBotEdge)
+            float rLow = rejBotLevel
+            float rHigh = math.min(math.max(rejBotEdge, rLow + minH), rLow + maxH)
+            if close > rHigh
+                if addZone(maDemandZones, rHigh, rLow, bar_index - rejBotOff, false, maxH)
+                    newDemandZone := true
+
+        // 2. Trend structure
+        if useStructure and breakDown and peakOK
+            float tTop = structTop
+            float tBottom = math.max(math.min(structTopBody, tTop - minH), tTop - maxH)
+            if close < tBottom
+                if addZone(maSupplyZones, tTop, tBottom, bar_index - hhOff, true, maxH)
+                    newSupplyZone := true
+
+        if useStructure and breakUp and troughOK
+            float uBottom = structBot
+            float uTop = math.min(math.max(structBotBody, uBottom + minH), uBottom + maxH)
+            if close > uTop
+                if addZone(maDemandZones, uTop, uBottom, bar_index - llOff, false, maxH)
+                    newDemandZone := true
+
+        // 3. Base + impulse
+        if useBase and impulseDown
+            float sTop = math.max(baseHi, high)
+            float sBottom = math.max(math.min(baseBot, sTop - minH), sTop - maxH)
+            if close < sBottom
+                if addZone(maSupplyZones, sTop, sBottom, bar_index - baseBars, true, maxH)
+                    newSupplyZone := true
+
+        if useBase and impulseUp
+            float dBottom = math.min(baseLo, low)
+            float dTop = math.min(math.max(baseTop, dBottom + minH), dBottom + maxH)
+            if close > dTop
+                if addZone(maDemandZones, dTop, dBottom, bar_index - baseBars, false, maxH)
+                    newDemandZone := true
+
+        // 4. Swing pivots
+        if usePivot and not na(pivotHigh)
+            float pTop = pivotHigh
+            float pBody = math.min(open[maSwingLen], close[maSwingLen])
+            float pBottom = math.max(math.min(pBody, pTop - minH), pTop - maxH)
+            if pTop - lowestSince >= atr * impulseMult and close < pBottom
+                if addZone(maSupplyZones, pTop, pBottom, bar_index - maSwingLen, true, maxH)
+                    newSupplyZone := true
+
+        if usePivot and not na(pivotLow)
+            float qBottom = pivotLow
+            float qBody = math.max(open[maSwingLen], close[maSwingLen])
+            float qTop = math.min(math.max(qBody, qBottom + minH), qBottom + maxH)
+            if highestSince - qBottom >= atr * impulseMult and close > qTop
+                if addZone(maDemandZones, qTop, qBottom, bar_index - maSwingLen, false, maxH)
+                    newDemandZone := true
+
+    if barstate.islast
+        renderZones(maSupplyZones, true)
+        renderZones(maDemandZones, false)
+
 // === TRADE STATE VARIABLES ===
 var label signalLabel = na
 var array<float> currentTPLevels = array.new<float>()
@@ -391,6 +700,29 @@ if tradeActive
         if showTP_SL_Lines
             setTradeRight(tradeEndX + 10)
 
+// === MARKET ANALYSIS SCORECARD (only reads the trade state above, never changes it) ===
+var int tp1Wins = 0
+var int slLosses = 0
+var bool maOutcomeCounted = false
+var bool maWasActive = false
+if longSignal or shortSignal
+    maOutcomeCounted := false
+bool maTp1Hit = array.size(tpHitStatus) > 0 and array.get(tpHitStatus, 0)
+bool maAllTpHit = array.size(tpHitStatus) > 0
+for hit in tpHitStatus
+    if not hit
+        maAllTpHit := false
+bool maEndedNow = maWasActive and not tradeActive
+if not maOutcomeCounted
+    if maEndedNow and not maAllTpHit
+        // the signal ended on its stop loss before TP1 was counted (same-bar SL + TP1 is treated as a loss)
+        slLosses += 1
+        maOutcomeCounted := true
+    else if maTp1Hit
+        tp1Wins += 1
+        maOutcomeCounted := true
+maWasActive := tradeActive
+
 // === ALERTS ===
 alertcondition(longSignal, title="Long EMA Cross", message="Long EMA Crossover Signal")
 alertcondition(shortSignal, title="Short EMA Cross", message="Short Crossover Signal")
@@ -457,7 +789,7 @@ if showDashboard and barstate.islast
 
 // === MARKET ANALYSIS DASHBOARD ===
 if showMarket and barstate.islast
-    var table marketTable = table.new(getTablePosition(marketPosition), 2, showVolumeRow ? 8 : 7,
+    var table marketTable = table.new(getTablePosition(marketPosition), 2, showVolumeRow ? 11 : 10,
          bgcolor = color.new(color.rgb(33, 33, 33), 80),
          border_width = 2, border_color = color.new(widgetBorderColor, 0),
          frame_width = 3, frame_color = color.new(widgetBorderColor, 0))
@@ -471,10 +803,8 @@ if showMarket and barstate.islast
     table.merge_cells(marketTable, 0, 0, 1, 0)
 
     // Momentum: direction of the EMA ribbon on this timeframe
-    momentumText  = ribbonDir ? "UPTREND" : "DOWNTREND"
-    momentumColor = ribbonDir ? upBg : downBg
     table.cell(marketTable, 0, 1, "Momentum", text_color=color.black, bgcolor=headBg, text_size=size.small)
-    table.cell(marketTable, 1, 1, momentumText, text_color=color.black, bgcolor=momentumColor, text_size=size.small)
+    table.cell(marketTable, 1, 1, ribbonDir ? "UPTREND" : "DOWNTREND", text_color=color.black, bgcolor=ribbonDir ? upBg : downBg, text_size=size.small)
 
     // Strength: how strongly the market is moving (not which way)
     bool trending = adx >= adxThreshold
@@ -488,43 +818,61 @@ if showMarket and barstate.islast
     table.cell(marketTable, 0, 3, "Structure", text_color=color.black, bgcolor=headBg, text_size=size.small)
     table.cell(marketTable, 1, 3, structText, text_color=color.black, bgcolor=structColor, text_size=size.small)
 
-    // Zones: where price sits relative to the active supply / demand zones
-    bool inSupply = false
-    bool inDemand = false
-    float nearSupBot = na
-    float nearSupTop = na
-    float nearDemBot = na
-    float nearDemTop = na
-    if array.size(zones) > 0
-        for i = 0 to array.size(zones) - 1
-            Zone mz = array.get(zones, i)
-            bool priceInside = close <= mz.top and close >= mz.bot
-            if mz.dir < 0
-                if priceInside
-                    inSupply := true
-                if mz.top >= close and (na(nearSupBot) or mz.bot < nearSupBot)
-                    nearSupBot := mz.bot
-                    nearSupTop := mz.top
-            else
-                if priceInside
-                    inDemand := true
-                if mz.bot <= close and (na(nearDemTop) or mz.top > nearDemTop)
-                    nearDemBot := mz.bot
-                    nearDemTop := mz.top
+    // Entry Bias: an opinion from trend, strength and zones. Information only, the entry signals ignore it.
+    bool biasTrendOK = ribbonDir ? close > maEmaTrend : close < maEmaTrend
+    bool biasZoneOK  = ribbonDir ? not inSupply : not inDemand
+    bool biasOK = biasTrendOK and trending and biasZoneOK
+    string blockedBy = ""
+    if not biasTrendOK
+        blockedBy += " Trend"
+    if not trending
+        blockedBy += " ADX"
+    if not biasZoneOK
+        blockedBy += " Zone"
+    string biasText = biasOK ? (ribbonDir ? "BUY only" : "SELL only") : "WAIT:" + blockedBy
+    color biasBg = biasOK ? (ribbonDir ? upBg : downBg) : waitBg
+    table.cell(marketTable, 0, 4, "Entry Bias", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 4, biasText, text_color=color.black, bgcolor=biasBg, text_size=size.small)
 
-    string posText = inSupply ? "Inside SUPPLY" : inDemand ? "Inside DEMAND" : "Between zones"
-    color posColor = inSupply ? color.new(supplyColor, 0) : inDemand ? color.new(demandColor, 0) : darkBg
-    table.cell(marketTable, 0, 4, "Price Position", text_color=color.black, bgcolor=headBg, text_size=size.small)
-    table.cell(marketTable, 1, 4, posText, text_color=color.white, bgcolor=posColor, text_size=size.small)
+    // Where price is relative to the tracked zones
+    table.cell(marketTable, 0, 5, "Price Position", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 5, inSupply ? "Inside SUPPLY" : inDemand ? "Inside DEMAND" : "Between zones", text_color=color.white, bgcolor=inSupply ? color.new(supplyColor, 0) : inDemand ? color.new(demandColor, 0) : darkBg, text_size=size.small)
 
-    string supText = na(nearSupBot) ? "No zone above" : str.tostring(nearSupBot, format.mintick) + " - " + str.tostring(nearSupTop, format.mintick)
-    string demText = na(nearDemTop) ? "No zone below" : str.tostring(nearDemBot, format.mintick) + " - " + str.tostring(nearDemTop, format.mintick)
-    table.cell(marketTable, 0, 5, "Nearest Supply", text_color=color.black, bgcolor=headBg, text_size=size.small)
-    table.cell(marketTable, 1, 5, supText, text_color=color.white, bgcolor=color.new(supplyColor, 0), text_size=size.small)
-    table.cell(marketTable, 0, 6, "Nearest Demand", text_color=color.black, bgcolor=headBg, text_size=size.small)
-    table.cell(marketTable, 1, 6, demText, text_color=color.white, bgcolor=color.new(demandColor, 0), text_size=size.small)
+    MaZone nearS = nearestZone(maSupplyZones, true)
+    MaZone nearD = nearestZone(maDemandZones, false)
+    string supplyText = "No zone above"
+    string demandText = "No zone below"
+    if not na(nearS)
+        supplyText := str.tostring(nearS.bottom, format.mintick) + " - " + str.tostring(nearS.top, format.mintick)
+    if not na(nearD)
+        demandText := str.tostring(nearD.bottom, format.mintick) + " - " + str.tostring(nearD.top, format.mintick)
+    table.cell(marketTable, 0, 6, "Nearest Supply", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 6, supplyText, text_color=color.white, bgcolor=color.new(supplyColor, 0), text_size=size.small)
+    table.cell(marketTable, 0, 7, "Nearest Demand", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 7, demandText, text_color=color.white, bgcolor=color.new(demandColor, 0), text_size=size.small)
+
+    // Scorecard over the loaded history: did TP1 come before SL?
+    int closedTrades = tp1Wins + slLosses
+    string rateText = closedTrades > 0 ? str.tostring(100.0 * tp1Wins / closedTrades, "#.0") + "% (" + str.tostring(tp1Wins) + "/" + str.tostring(closedTrades) + ")" : "-"
+    table.cell(marketTable, 0, 8, "TP1 before SL", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 8, rateText, text_color=color.white, bgcolor=darkBg, text_size=size.small)
+
+    // The signal that is currently running, and how many targets it has reached
+    int tpsReached = 0
+    for hit in tpHitStatus
+        if hit
+            tpsReached += 1
+    string tradeText = "No running signal"
+    color tradeBg = darkBg
+    color tradeTextColor = color.white
+    if tradeActive
+        tradeText := (tradeDirection > 0 ? "BUY running" : "SELL running") + " (TP " + str.tostring(tpsReached) + "/" + str.tostring(array.size(tpHitStatus)) + ")"
+        tradeBg := tradeDirection > 0 ? upBg : downBg
+        tradeTextColor := color.black
+    table.cell(marketTable, 0, 9, "Signal Status", text_color=color.black, bgcolor=headBg, text_size=size.small)
+    table.cell(marketTable, 1, 9, tradeText, text_color=tradeTextColor, bgcolor=tradeBg, text_size=size.small)
 
     if showVolumeRow
         volText = na(volume) ? "N/A" : str.tostring(math.round(volume))
-        table.cell(marketTable, 0, 7, "Volume", text_color=color.black, bgcolor=headBg, text_size=size.small)
-        table.cell(marketTable, 1, 7, volText, text_color=color.white, bgcolor=darkBg, text_size=size.small)
+        table.cell(marketTable, 0, 10, "Volume", text_color=color.black, bgcolor=headBg, text_size=size.small)
+        table.cell(marketTable, 1, 10, volText, text_color=color.white, bgcolor=darkBg, text_size=size.small)
