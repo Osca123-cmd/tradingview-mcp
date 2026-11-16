@@ -30,7 +30,7 @@ swingTextColor = input.color(#fff100, "Swing Label Color", group="Market Structu
 bosColor = input.color(color.white, "BOS Color", group="Market Structure")
 
 // Supply & Demand Inputs
-showZones = input.bool(false, "Show Old POI Zones (second zone set)", group="Supply & Demand", tooltip="The old POI zones now feed the main zone system (Zone Detection group), so they are off by default to avoid drawing every zone twice.")
+showZones = input.bool(true, "Show Supply / Demand (POI)", group="Supply & Demand")
 zoneLookback = input.int(20, "Zone Candle Lookback", minval=1, maxval=100, group="Supply & Demand")
 zoneWidth = input.float(0.3, "Zone Width (x ATR)", minval=0.05, step=0.05, group="Supply & Demand")
 maxZones = input.int(6, "Max Active Zones", minval=1, maxval=20, group="Supply & Demand")
@@ -55,29 +55,28 @@ adxLen = input.int(14, "ADX Length", minval=1, group="Market Analysis Settings")
 adxThreshold = input.float(20.0, "ADX Trending Level", minval=0, step=0.5, group="Market Analysis Settings", tooltip="ADX below this level is shown as Sideways.")
 trendEmaLen = input.int(200, "Trend EMA Length (Entry Bias)", minval=1, group="Market Analysis Settings", tooltip="Only used by the Entry Bias row of the Market Analysis table. It does not change the entry signals.")
 
-// Supply & demand zones (one zone system; feeds Price Position / Nearest Supply / Nearest Demand; never changes the entry signals)
-maDrawZones   = input.bool(true, "Draw Zones On Chart", group="Zone Detection", tooltip="Draws the zones named in the Market Analysis table, so the prices in the table can be seen on the chart.")
-maShowZones     = input.bool(true, "Track Supply & Demand For Market Analysis", group="Zone Detection")
-useRejection  = input.bool(true, "Detect: Repeated Rejections (fastest)", group="Zone Detection", tooltip="Draws a zone as soon as several candles are held at the same level and close back away from it.")
-rejMinTouches = input.int(2, "   Rejections Needed", minval=2, maxval=6, group="Zone Detection", tooltip="How many candles must be held at the same level. 2 = fastest, 3-4 = stricter.")
-rejLookback   = input.int(8, "   Rejection Lookback (bars)", minval=3, maxval=30, group="Zone Detection")
-rejTol        = input.float(0.15, "   Same-Level Tolerance (x ATR)", minval=0.02, step=0.01, group="Zone Detection")
-useStructure  = input.bool(true, "Detect: Trend Structure (fresh zones in strong trends)", group="Zone Detection", tooltip="When price closes at a new low, the last pullback high becomes a fresh supply zone (and the reverse for demand). Keeps producing new zoneList while a strong trend runs.")
-structLen     = input.int(10, "   Structure Length (bars)", minval=4, maxval=50, group="Zone Detection")
-useBase       = input.bool(true, "Detect: Base + Impulse Candle", group="Zone Detection", tooltip="The small candle(s) right before an explosive candle. Appears when the explosive candle closes.")
-impulseCandle = input.float(1.3, "   Impulse Candle Body (x ATR)", minval=0.5, step=0.1, group="Zone Detection")
-usePivot      = input.bool(true, "Detect: Swing Pivots", group="Zone Detection", tooltip="Confirmed swing highs/lows. Appears Swing Length bars after the swing.")
-usePoi        = input.bool(true, "Detect: POI (last opposite candle before BOS)", group="Zone Detection", tooltip="The same idea as the old POI zones, but sized and tracked together with the other zones.")
-maSwingLen      = input.int(3, "   Swing Length", minval=2, maxval=50, group="Zone Detection")
-impulseMult   = input.float(1.5, "   Minimum Move Away (x ATR)", minval=0, step=0.1, group="Zone Detection")
-zoneMinWidth  = input.float(0.15, "Minimum Zone Height (x ATR)", minval=0.05, step=0.05, group="Zone Detection")
-zoneMaxWidth  = input.float(0.5, "Maximum Zone Height (x ATR)", minval=0.1, step=0.1, group="Zone Detection", tooltip="Caps how thick a zone can be. Lower = tighter, more precise zoneList.")
-maMaxZones      = input.int(2, "Zones Drawn Per Side (nearest to price)", minval=1, maxval=20, group="Zone Detection")
-maxStored     = input.int(30, "Zones Tracked Per Side", minval=5, maxval=100, group="Zone Detection", tooltip="Zones remembered in the background. Only the nearest ones are drawn; the rest appear automatically when price moves toward them.")
-flipZones     = input.bool(true, "Flip Broken Zones (demand becomes supply, and reverse)", group="Zone Detection")
-breakMode     = input.string("Close", "Zone Broken By", options=["Close", "Wick"], group="Zone Detection")
-showBroken    = input.bool(false, "Keep Broken Zones (grey)", group="Zone Detection")
-zoneExtend    = input.int(20, "Extend Zones Right (bars)", minval=1, maxval=200, group="Zone Detection")
+// Market Analysis zone tracker (feeds Price Position / Nearest Supply / Nearest Demand; never changes the entry signals)
+maDrawZones   = input.bool(true, "Draw Nearest Zones On Chart", group="Market Analysis Zones", tooltip="Draws the zones named in the Market Analysis table, so the prices in the table can be seen on the chart.")
+maShowZones     = input.bool(true, "Track Supply & Demand For Market Analysis", group="Market Analysis Zones")
+useRejection  = input.bool(true, "Detect: Repeated Rejections (fastest)", group="Market Analysis Zones", tooltip="Draws a zone as soon as several candles are held at the same level and close back away from it.")
+rejMinTouches = input.int(2, "   Rejections Needed", minval=2, maxval=6, group="Market Analysis Zones", tooltip="How many candles must be held at the same level. 2 = fastest, 3-4 = stricter.")
+rejLookback   = input.int(8, "   Rejection Lookback (bars)", minval=3, maxval=30, group="Market Analysis Zones")
+rejTol        = input.float(0.15, "   Same-Level Tolerance (x ATR)", minval=0.02, step=0.01, group="Market Analysis Zones")
+useStructure  = input.bool(true, "Detect: Trend Structure (fresh zones in strong trends)", group="Market Analysis Zones", tooltip="When price closes at a new low, the last pullback high becomes a fresh supply zone (and the reverse for demand). Keeps producing new zoneList while a strong trend runs.")
+structLen     = input.int(10, "   Structure Length (bars)", minval=4, maxval=50, group="Market Analysis Zones")
+useBase       = input.bool(true, "Detect: Base + Impulse Candle", group="Market Analysis Zones", tooltip="The small candle(s) right before an explosive candle. Appears when the explosive candle closes.")
+impulseCandle = input.float(1.3, "   Impulse Candle Body (x ATR)", minval=0.5, step=0.1, group="Market Analysis Zones")
+usePivot      = input.bool(true, "Detect: Swing Pivots", group="Market Analysis Zones", tooltip="Confirmed swing highs/lows. Appears Swing Length bars after the swing.")
+maSwingLen      = input.int(5, "   Swing Length", minval=2, maxval=50, group="Market Analysis Zones")
+impulseMult   = input.float(1.5, "   Minimum Move Away (x ATR)", minval=0, step=0.1, group="Market Analysis Zones")
+zoneMinWidth  = input.float(0.2, "Minimum Zone Height (x ATR)", minval=0.05, step=0.05, group="Market Analysis Zones")
+zoneMaxWidth  = input.float(0.6, "Maximum Zone Height (x ATR)", minval=0.1, step=0.1, group="Market Analysis Zones", tooltip="Caps how thick a zone can be. Lower = tighter, more precise zoneList.")
+maMaxZones      = input.int(1, "Zones Drawn Per Side (nearest to price)", minval=1, maxval=20, group="Market Analysis Zones")
+maxStored     = input.int(30, "Zones Tracked Per Side", minval=5, maxval=100, group="Market Analysis Zones", tooltip="Zones remembered in the background. Only the nearest ones are drawn; the rest appear automatically when price moves toward them.")
+flipZones     = input.bool(true, "Flip Broken Zones (demand becomes supply, and reverse)", group="Market Analysis Zones")
+breakMode     = input.string("Close", "Zone Broken By", options=["Close", "Wick"], group="Market Analysis Zones")
+showBroken    = input.bool(false, "Keep Broken Zones (grey)", group="Market Analysis Zones")
+zoneExtend    = input.int(20, "Extend Zones Right (bars)", minval=1, maxval=200, group="Market Analysis Zones")
 
 // Unified Border Color Input
 widgetBorderColor = input.color(#000000, "Screener & Dashboard border's colors", group="Widget Style", tooltip="Changes all borders and outlines for both screener and dashboard")
@@ -273,7 +272,7 @@ var array<MaZone> maSupplyZones = array.new<MaZone>()
 var array<MaZone> maDemandZones = array.new<MaZone>()
 
 zoneText(MaZone z) =>
-    (z.isSupply ? "SUPPLY" : "DEMAND") + (z.flipped ? " (flip)" : "") + (z.tests > 0 ? " • test " + str.tostring(z.tests) : "")
+    (z.isSupply ? "NEAREST SUPPLY" : "NEAREST DEMAND") + (z.flipped ? " (flip)" : "") + (z.tests > 0 ? " • test " + str.tostring(z.tests) : "")
 
 zoneOverlaps(array<MaZone> zoneList, float top, float bottom) =>
     bool res = false
@@ -300,7 +299,7 @@ addZone(array<MaZone> zoneList, float top, float bottom, int leftBar, bool isSup
             break
     if not merged
         color c = isSupply ? supplyColor : demandColor
-        box b = box.new(leftBar, top, bar_index + zoneExtend, bottom, border_color=color.new(c, 40), border_width=1, bgcolor=color.new(c, 80), text=isSupply ? "SUPPLY" : "DEMAND", text_color=color.new(c, 0), text_size=size.small, text_halign=text.align_right, text_valign=text.align_center)
+        box b = box.new(leftBar, top, bar_index + zoneExtend, bottom, border_color=color.new(c, 40), border_width=1, bgcolor=color.new(c, 80), text=isSupply ? "NEAREST SUPPLY" : "NEAREST DEMAND", text_color=color.new(c, 0), text_size=size.small, text_halign=text.align_right, text_valign=text.align_center)
         zoneList.push(MaZone.new(b, top, bottom, isSupply))
         if zoneList.size() > maxStored
             MaZone old = zoneList.shift()
@@ -457,27 +456,6 @@ pivotLow  = ta.pivotlow(low, maSwingLen, maSwingLen)
 lowestSince  = ta.lowest(low, maSwingLen)
 highestSince = ta.highest(high, maSwingLen)
 
-// --- Detection 5: POI, the last opposite candle before a break of structure ---
-poiCandle(int dir) =>
-    int idx = na
-    for i = 1 to zoneLookback
-        if (dir > 0 and close[i] < open[i]) or (dir < 0 and close[i] > open[i])
-            idx := i
-            break
-    float cHigh = na
-    float cLow = na
-    float cBodyTop = na
-    float cBodyBot = na
-    if not na(idx)
-        cHigh := high[idx]
-        cLow := low[idx]
-        cBodyTop := math.max(open[idx], close[idx])
-        cBodyBot := math.min(open[idx], close[idx])
-    [cHigh, cLow, cBodyTop, cBodyBot, idx]
-
-[poiBullHigh, poiBullLow, poiBullBodyTop, poiBullBodyBot, poiBullOff] = poiCandle(1)
-[poiBearHigh, poiBearLow, poiBearBodyTop, poiBearBodyBot, poiBearOff] = poiCandle(-1)
-
 bool inSupply = false
 bool inDemand = false
 bool supplyTested = false
@@ -558,21 +536,6 @@ if maShowZones
             float qTop = math.min(math.max(qBody, qBottom + minH), qBottom + maxH)
             if highestSince - qBottom >= atr * impulseMult and close > qTop
                 if addZone(maDemandZones, qTop, qBottom, bar_index - maSwingLen, false, maxH)
-                    newDemandZone := true
-
-        // 5. POI at a break of structure
-        if usePoi and bearBreak and not na(poiBearOff)
-            float oTop = poiBearHigh
-            float oBottom = math.max(math.min(poiBearBodyBot, oTop - minH), oTop - maxH)
-            if close < oBottom
-                if addZone(maSupplyZones, oTop, oBottom, bar_index - poiBearOff, true, maxH)
-                    newSupplyZone := true
-
-        if usePoi and bullBreak and not na(poiBullOff)
-            float oBottom = poiBullLow
-            float oTop = math.min(math.max(poiBullBodyTop, oBottom + minH), oBottom + maxH)
-            if close > oTop
-                if addZone(maDemandZones, oTop, oBottom, bar_index - poiBullOff, false, maxH)
                     newDemandZone := true
 
     if barstate.islast
@@ -761,6 +724,13 @@ if not maOutcomeCounted
 maTp1Prev := maTp1Hit
 maWasActive := tradeActive
 
+// Last entry signal, for the screener (read-only)
+var int lastSigBar = na
+var int lastSigDir = 0
+if longSignal or shortSignal
+    lastSigBar := bar_index
+    lastSigDir := longSignal ? 1 : -1
+
 // === ALERTS ===
 alertcondition(longSignal, title="Long EMA Cross", message="Long EMA Crossover Signal")
 alertcondition(shortSignal, title="Short EMA Cross", message="Short Crossover Signal")
@@ -793,6 +763,26 @@ trendCode(float fast, float slow, float adxV, float atrV) =>
 codeScore(int c) =>
     c == 3 ? 2.0 : c == 2 ? 1.0 : c == 1 ? 0.5 : c == -1 ? -0.5 : c == -2 ? -1.0 : c == -3 ? -2.0 : 0.0
 
+trendStateText(int code) =>
+    switch code
+        3  => "Strong Bullish"
+        2  => "Bullish"
+        1  => "Bullish Sideways"
+        -1 => "Bearish Sideways"
+        -2 => "Bearish"
+        -3 => "Strong Bearish"
+        => "Sideways"
+
+trendStateColor(int code) =>
+    switch code
+        3  => color.new(#00e676, 0)
+        2  => color.new(#81c784, 0)
+        1  => color.new(#c5e1a5, 0)
+        -1 => color.new(#ffcc80, 0)
+        -2 => color.new(#e57373, 0)
+        -3 => color.new(#ff1744, 0)
+        => color.new(#ffd600, 0)
+
 [tf1Fast, tf1Slow, tf1Adx, tf1AdxPrev, tf1Atr] = tfTrend(combinedTrendTF1)
 [tf2Fast, tf2Slow, tf2Adx, tf2AdxPrev, tf2Atr] = tfTrend(combinedTrendTF2)
 [tf3Fast, tf3Slow, tf3Adx, tf3AdxPrev, tf3Atr] = tfTrend(combinedTrendTF3)
@@ -808,7 +798,7 @@ int trendBears = (tf1Code < 0 ? 1 : 0) + (tf2Code < 0 ? 1 : 0) + (tf3Code < 0 ? 
 int trendVerdictCode = 0
 string trendVerdictText = "SIDEWAYS"
 if trendBulls > 0 and trendBears > 0 and math.abs(trendAvg) < 0.75
-    // timeframes disagree
+    // the timeframes disagree
     trendVerdictCode := 0
     trendVerdictText := trendAvg > 0.1 ? "MIXED (lean BULL)" : trendAvg < -0.1 ? "MIXED (lean BEAR)" : "MIXED"
 else if trendAvg >= 1.5
@@ -833,9 +823,31 @@ else
     trendVerdictCode := -3
     trendVerdictText := "STRONG BEARISH"
 
+// Confirmations used by the screener: momentum, structure, trend, strength, zone room
+int bigDir = trendVerdictCode > 0 ? 1 : trendVerdictCode < 0 ? -1 : 0
+bool isTrending = adx >= adxThreshold
+int longScore  = (ribbonDir ? 1 : 0) + (structDir == 1 ? 1 : 0) + (bigDir == 1 ? 1 : 0) + (isTrending ? 1 : 0) + (not inSupply ? 1 : 0)
+int shortScore = (not ribbonDir ? 1 : 0) + (structDir == -1 ? 1 : 0) + (bigDir == -1 ? 1 : 0) + (isTrending ? 1 : 0) + (not inDemand ? 1 : 0)
+
 // === SCREENER DASHBOARD ===
+// Grade of one side: 5/5 strong, 3-4 normal, below 3 weak. A side only counts when the EMA ribbon points that way.
+sideGrade(bool active, int score, string name) =>
+    string txt = "No Signal"
+    color bg = color.new(#ffd600, 0)
+    if active
+        if score >= 5
+            txt := "STRONG " + name
+            bg := name == "LONG" ? color.new(#00e676, 0) : color.new(#ff1744, 0)
+        else if score >= 3
+            txt := name
+            bg := name == "LONG" ? color.new(#81c784, 0) : color.new(#e57373, 0)
+        else
+            txt := "WEAK " + name
+            bg := name == "LONG" ? color.new(#c5e1a5, 0) : color.new(#ffcc80, 0)
+    [txt, bg]
+
 if showScreener and barstate.islast
-    var table screenerTable = table.new(getTablePosition(screenerPosition), 2, 3,
+    var table screenerTable = table.new(getTablePosition(screenerPosition), 2, 5,
          bgcolor = color.new(color.rgb(33, 33, 33), 80),
          border_width = 2, border_color = color.new(widgetBorderColor, 0),
          frame_width = 3, frame_color = color.new(widgetBorderColor, 0))
@@ -848,35 +860,26 @@ if showScreener and barstate.islast
     table.cell(screenerTable, 0, 1, "Long",  text_color=color.black, bgcolor=color.new(#2dff03, 0), text_size=size.small, text_halign=text.align_center)
     table.cell(screenerTable, 1, 1, "Short", text_color=color.black, bgcolor=color.new(#ff0303, 0), text_size=size.small, text_halign=text.align_center)
 
-    // Signal row
-    longColor  = ribbonDir ? color.new(#1efd00, 0) : color.new(#ffd600,0)
-    shortColor = not ribbonDir ? color.new(#d50000,0) : color.new(#ffd600,0)
-    longText   = ribbonDir ? "Long" : "No Signal"
-    shortText  = not ribbonDir ? "Short" : "No Signal"
+    // Signal row: graded by how many confirmations agree
+    [longText, longColor]   = sideGrade(ribbonDir, longScore, "LONG")
+    [shortText, shortColor] = sideGrade(not ribbonDir, shortScore, "SHORT")
     table.cell(screenerTable, 0, 2, longText,  text_color=color.black, bgcolor=longColor,  text_size=size.small, text_halign=text.align_center)
     table.cell(screenerTable, 1, 2, shortText, text_color=color.black, bgcolor=shortColor, text_size=size.small, text_halign=text.align_center)
 
+    // Confirmation count for each side
+    table.cell(screenerTable, 0, 3, "Confirm " + str.tostring(longScore) + "/5",  text_color=color.white, bgcolor=color.new(#212121, 0), text_size=size.small, text_halign=text.align_center)
+    table.cell(screenerTable, 1, 3, "Confirm " + str.tostring(shortScore) + "/5", text_color=color.white, bgcolor=color.new(#212121, 0), text_size=size.small, text_halign=text.align_center)
+
+    // Last entry signal and how long ago it came
+    string lastSigText = "Last signal: none yet"
+    color lastSigBg = color.new(#212121, 0)
+    if not na(lastSigBar)
+        lastSigText := (lastSigDir > 0 ? "Last: Smart Buy " : "Last: Smart Sell ") + str.tostring(bar_index - lastSigBar) + " bars ago"
+        lastSigBg := lastSigDir > 0 ? color.new(#00c853, 0) : color.new(#d50000, 0)
+    table.cell(screenerTable, 0, 4, lastSigText, text_color=color.white, bgcolor=lastSigBg, text_size=size.small, text_halign=text.align_center)
+    table.merge_cells(screenerTable, 0, 4, 1, 4)
+
 // === TREND ANALYSIS DASHBOARD ===
-trendStateText(int code) =>
-    switch code
-        3  => "Strong Bullish"
-        2  => "Bullish"
-        1  => "Bullish Sideways"
-        -1 => "Bearish Sideways"
-        -2 => "Bearish"
-        -3 => "Strong Bearish"
-        => "Sideways"
-
-trendStateColor(int code) =>
-    switch code
-        3  => color.new(#00e676, 0)
-        2  => color.new(#81c784, 0)
-        1  => color.new(#c5e1a5, 0)
-        -1 => color.new(#ffcc80, 0)
-        -2 => color.new(#e57373, 0)
-        -3 => color.new(#ff1744, 0)
-        => color.new(#ffd600, 0)
-
 trendTfRow(table t, int row, string tf, int code, float adxV, float adxPrev) =>
     table.cell(t, 0, row, getTFLabel(tf), text_color=color.black, bgcolor=color.new(#03f7ff,0), text_size=size.small)
     table.cell(t, 1, row, na(adxV) ? "-" : trendStateText(code), text_color=color.black, bgcolor=trendStateColor(code), text_size=size.small)
@@ -926,12 +929,11 @@ if showMarket and barstate.islast
     table.cell(marketTable, 0, 1, "Momentum", text_color=color.black, bgcolor=headBg, text_size=size.small)
     table.cell(marketTable, 1, 1, ribbonDir ? "UPTREND" : "DOWNTREND", text_color=color.black, bgcolor=ribbonDir ? upBg : downBg, text_size=size.small)
 
-    // Strength: how strongly the market is moving (not which way), with its direction of change
-    bool trending = adx >= adxThreshold
-    string adxState = adx >= 40 ? " Very Strong" : adx >= trendStrongAdx ? " Strong" : trending ? " Trending" : " Sideways"
+    // Strength: how strongly the market is moving (not which way), and whether it is growing
+    string adxState = adx >= 40 ? " Very Strong" : adx >= trendStrongAdx ? " Strong" : isTrending ? " Trending" : " Sideways"
     string adxArrow = adx > adx[1] ? " ▲" : " ▼"
     table.cell(marketTable, 0, 2, "Strength (ADX)", text_color=color.black, bgcolor=headBg, text_size=size.small)
-    table.cell(marketTable, 1, 2, str.tostring(adx, "#.0") + adxState + adxArrow, text_color=color.black, bgcolor=trending ? upBg : waitBg, text_size=size.small)
+    table.cell(marketTable, 1, 2, str.tostring(adx, "#.0") + adxState + adxArrow, text_color=color.black, bgcolor=isTrending ? upBg : waitBg, text_size=size.small)
 
     // Structure: direction of the most recent break of structure, and how long ago it happened
     string structText = structDir > 0 ? "BULLISH BOS" : structDir < 0 ? "BEARISH BOS" : "No BOS yet"
@@ -943,7 +945,6 @@ if showMarket and barstate.islast
 
     // Alignment: momentum, structure and the Trend Analysis verdict read together
     int momDir = ribbonDir ? 1 : -1
-    int bigDir = trendVerdictCode > 0 ? 1 : trendVerdictCode < 0 ? -1 : 0
     string alignText = "CONFLICT - wait"
     color alignBg = waitBg
     if bigDir == 0
@@ -961,11 +962,11 @@ if showMarket and barstate.islast
     // Entry Bias: an opinion from trend, strength and zones. Information only, the entry signals ignore it.
     bool biasTrendOK = ribbonDir ? close > maEmaTrend : close < maEmaTrend
     bool biasZoneOK  = ribbonDir ? not inSupply : not inDemand
-    bool biasOK = biasTrendOK and trending and biasZoneOK
+    bool biasOK = biasTrendOK and isTrending and biasZoneOK
     string blockedBy = ""
     if not biasTrendOK
         blockedBy += " Trend"
-    if not trending
+    if not isTrending
         blockedBy += " ADX"
     if not biasZoneOK
         blockedBy += " Zone"
@@ -974,7 +975,7 @@ if showMarket and barstate.islast
     table.cell(marketTable, 0, 5, "Entry Bias", text_color=color.black, bgcolor=headBg, text_size=size.small)
     table.cell(marketTable, 1, 5, biasText, text_color=color.black, bgcolor=biasBg, text_size=size.small)
 
-    // Where price is relative to the zones
+    // Where price is relative to the tracked zones
     table.cell(marketTable, 0, 6, "Price Position", text_color=color.black, bgcolor=headBg, text_size=size.small)
     table.cell(marketTable, 1, 6, inSupply ? "Inside SUPPLY" : inDemand ? "Inside DEMAND" : "Between zones", text_color=color.white, bgcolor=inSupply ? color.new(supplyColor, 0) : inDemand ? color.new(demandColor, 0) : darkBg, text_size=size.small)
 
