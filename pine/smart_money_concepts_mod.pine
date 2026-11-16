@@ -12,7 +12,7 @@
 //   7. Added BUY / SELL labels (order block retest and internal CHoCH in the trend direction) with alerts.
 
 //@version=5
-indicator('Smart Money Concepts [LuxAlgo] - Modified', 'SMC LuxAlgo Mod', overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500)
+indicator('Smart Money Concepts [LuxAlgo] - Modified', 'SMC LuxAlgo Mod', overlay = true, scale = scale.right, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500)
 //---------------------------------------------------------------------------------------------------------------------}
 //CONSTANTS & STRINGS & INPUTS
 //---------------------------------------------------------------------------------------------------------------------{
